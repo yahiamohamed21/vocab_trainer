@@ -1,0 +1,822 @@
+Vocab Trainer – مشروع التوثيق الشامل
+
+مشروع Next.js (App Router) + React + TypeScript + Tailwind
+واجهة عربية/إنجليزية – LocalStorage – Admin Dashboard – Auth بسيط
+
+1. نظرة عامة على المشروع
+
+Vocab Trainer هو تطبيق لتدريب المفردات ونطقها يدعم:
+
+واجهة عربية/إنجليزية (UI language).
+
+ثيم داكن/فاتح.
+
+إدارة كلمات حسب لغة التدريب.
+
+تدريب ونطق (TTS + تسجيل صوت المستخدم).
+
+Quiz + إحصائيات (Spaced Repetition logic موجود في الـ state).
+
+نظام مستخدمين بسيط:
+
+Admin Dashboard
+
+Users عاديين
+
+تخزين كل شيء محليًا عبر localStorage.
+
+يعمل باستخدام:
+
+Next.js App Router (أدلة app/).
+
+React + TypeScript.
+
+Tailwind CSS للتصميم.
+
+SweetAlert2 للتأكيدات والرسائل.
+
+localStorage كبديل مؤقت للـ Backend.
+
+2. بنية المشروع (Structure)
+2.1. الجذر – app/layout.tsx
+// app/layout.tsx
+import type { Metadata } from 'next';
+import './globals.css';
+import { ReactNode } from 'react';
+
+import { UiSettingsProvider } from '@/context/UiSettingsContext';
+import { AppStateProvider } from '@/context/AppStateContext';
+import { AuthProvider } from '@/context/AuthContext';
+import TopBar from '../components/TopBar';
+
+export const metadata: Metadata = {
+  title: 'Vocab Trainer',
+  description:
+    'Multi-language vocabulary and pronunciation trainer with TTS, quizzes, stats, and an admin dashboard.',
+};
+
+export default function RootLayout({ children }: { children: ReactNode }) {
+  return (
+    <html lang="en">
+      <body className="min-h-screen bg-slate-950 text-slate-50 antialiased">
+        <UiSettingsProvider>
+          <AppStateProvider>
+            <AuthProvider>
+              <div className="min-h-screen flex flex-col">
+                <TopBar />
+                <main className="flex-1 flex justify-center">
+                  {children}
+                </main>
+              </div>
+            </AuthProvider>
+          </AppStateProvider>
+        </UiSettingsProvider>
+      </body>
+    </html>
+  );
+}
+
+
+وظائف:
+
+يغلِّف كل صفحات التطبيق داخل:
+
+UiSettingsProvider (ثيم + لغة واجهة).
+
+AppStateProvider (الكلمات + الإحصائيات + اللغة الحالية).
+
+AuthProvider (المستخدم الحالي + تسجيل الدخول/الخروج).
+
+يضيف TopBar في أعلى كل الصفحات (بشكل خاص ومبسّط في /login).
+
+يضع الأسلوب العام (خلفية داكنة + نص فاتح) لكامل التطبيق.
+
+2.2. الصفحات الأساسية
+
+الصفحة الرئيسية: app/page.tsx
+
+تحتوي على:
+
+Header محلي (العنوان + سويتش لغة واجهة + سويتش ثيم).
+
+LanguageSelector لاختيار لغة التدريب.
+
+Tabs:
+
+Training
+
+Words
+
+Quiz
+
+Stats
+
+Views:
+
+TrainingView
+
+WordsView
+
+QuizView
+
+StatsView
+
+صفحة تسجيل الدخول: app/login/page.tsx
+
+نموذج Login أنيق بواجهة عربية/إنجليزية.
+
+يدعم:
+
+تغيير uiLang (AR/EN) من أعلى الكارت.
+
+تغيير theme (Light/Dark).
+
+إدخال email + password.
+
+يستخدم:
+
+useAuth().login(email, password) لإتمام تسجيل الدخول.
+
+SweetAlert2 لعرض:
+
+خطأ بيانات خاطئة.
+
+نجاح تسجيل الدخول.
+
+بعد النجاح:
+
+لو user.role === 'admin' → router.replace('/admin').
+
+لو user.role === 'user' → router.replace('/').
+
+صفحة الأدمن: app/admin/page.tsx
+
+لوحة تحكم لإدارة المستخدمين (تفاصيلها في قسم خاص أدناه).
+
+3. الـ Contexts (حالة التطبيق المشتركة)
+3.1. UiSettingsContext
+
+ملف: components/context/UiSettingsContext.tsx
+
+المسؤول عن:
+
+theme: 'dark' | 'light'
+
+uiLang: 'ar' | 'en'
+
+دوال:
+
+setTheme(theme)
+
+setUiLang(lang)
+
+toggleTheme()
+
+toggleUiLang()
+
+التخزين:
+
+يخزن الإعدادات في localStorage تحت المفتاح:
+
+vocab-trainer-ui-settings
+
+يحمّل الإعدادات عند بداية التشغيل.
+
+يلفّ الأطفال في div:
+
+app-theme-dark أو app-theme-light (يمكن استخدامها في CSS).
+
+3.2. AuthContext
+
+ملف: components/context/AuthContext.tsx
+
+الأنواع:
+
+AdminUser فيه:
+
+id
+
+name
+
+email
+
+password
+
+createdAt
+
+languages: LanguageId[]
+
+role: 'admin' | 'user'
+
+القيم في الـ context:
+
+currentUser: AdminUser | null
+
+loading: boolean – لمعرفة متى انتهى تحميل المستخدم.
+
+login(email, password):
+
+يبحث في users من loadUsers().
+
+يطابق email.toLowerCase() + password.
+
+يعيد { ok: true, user } أو { ok: false, error: 'INVALID_CREDENTIALS' }.
+
+يخزن currentUser.id في localStorage تحت:
+
+vt_currentUserId
+
+يحوي logic إضافي:
+
+لو admin@example.com / admin123 لم يوجد في التخزين → يقوم بعمل seeding له.
+
+logout():
+
+يمسح currentUser من الstate.
+
+يحذف vt_currentUserId من localStorage.
+
+seeding:
+
+عند أول تشغيل أو لو ناقص الأدمن واليوزر:
+
+ينشئ:
+
+Admin:
+
+email: admin@example.com
+
+password: admin123
+
+User:
+
+email: user@example.com
+
+password: user123
+
+يضيفهم إلى قائمة المستخدمين (saveUsers).
+
+3.3. AppStateContext
+
+ملف: components/context/AppStateContext.tsx
+
+يمثل حالة التطبيق (التدريب):
+
+words: Word[]
+
+stats (الإحصائيات):
+
+totalQuestions
+
+correctAnswers
+
+lastQuizDate
+
+currentLanguageId: LanguageId
+
+initialized: boolean
+
+الدوال:
+
+addOrUpdateWord({ text, translation?, example?, topic? })
+
+يحدّث كلمة موجودة لنفس اللغة الحالية (حسب text).
+
+أو ينشئ Word جديدة بالحقول الافتراضية (reviewCount, correctCount, …).
+
+deleteWord(id)
+
+deleteWordsForCurrentLanguage()
+
+setCurrentLanguageId(langId)
+
+يتحقق أن اللغة موجودة في LANGUAGES.
+
+touchReview(id)
+
+يزيد reviewCount ويضبط lastReviewed للتو.
+
+recordQuizResult(wordId, correct)
+
+يحدّث:
+
+reviewCount
+
+correctCount / wrongCount
+
+intervalDays, nextReviewAt, lastReviewed (Spaced Repetition).
+
+يحدّث stats:
+
+totalQuestions
+
+correctAnswers
+
+lastQuizDate.
+
+saveRecordingForWord(text, recordingUrl)
+
+يبحث عن الكلمة بالنص (نفس اللغة الحالية) ويحدّث recordingUrl.
+
+أو ينشئ كلمة جديدة بهذا التسجيل.
+
+التخزين:
+
+عند التحميل:
+
+loadWords()
+
+loadCurrentLanguage('en')
+
+loadStats()
+
+عند التغيير:
+
+يستخدم persistState(words, stats, currentLanguageId) لحفظ كل شيء في localStorage.
+
+4. التوب بار (TopBar)
+
+ملف: components/TopBar.tsx
+
+الوظائف:
+
+يظهر في كل الصفحات (layout-level) مع استثناء شكلي بسيط لـ /login.
+
+يعتمد على:
+
+useAuth() → currentUser, logout, loading.
+
+useUiSettings() → uiLang, theme.
+
+المحتوى:
+
+يسار:
+
+اسم التطبيق:
+
+عربي: "مدرّب المفردات"
+
+إنجليزي: "Vocab Trainer"
+
+Badge:
+
+"Beta" أو "Dashboard" لو المسار /admin.
+
+يمين:
+
+لو loading → Skeleton.
+
+لو currentUser موجود:
+
+Chip فيها:
+
+الاسم.
+
+الدور (Admin/User).
+
+زر "Admin" لو الدور admin والمسار ليس /admin.
+
+زر "Logout" مع SweetAlert2:
+
+تأكيد:
+
+عنوان: تأكيد الخروج.
+
+اختيار Yes/Cancel.
+
+عند التأكيد:
+
+logout().
+
+router.push('/login').
+
+لو مفيش currentUser:
+
+زر "Login" → يذهب إلى /login.
+
+الـ TopBar يراعي:
+
+RTL/LTR حسب uiLang.
+
+Dark/Light حسب theme.
+
+تصميم Tailwind نظيف، Rounded، Gradients خفيفة.
+
+5. لوحة التحكم (Admin Dashboard)
+
+ملف: app/admin/page.tsx
+
+5.1. وظائف عامة
+
+عرض قائمة المستخدمين من loadUsers().
+
+إضافة مستخدم جديد:
+
+Name
+
+Email
+
+Password
+
+Role (admin/user)
+
+Allowed languages (LanguageId[])
+
+حذف مستخدم.
+
+تغيير الدور من داخل القائمة.
+
+إدارة اللغات المسموح بها لكل مستخدم.
+
+تعديل بيانات المستخدم (Edit):
+
+name + email + password + role
+
+مع SweetAlert تأكيد قبل الحفظ.
+
+منع تكرار الإيميل.
+
+منع الحقول الفارغة.
+
+5.2. الإحصائيات في الهيدر
+
+Total users
+
+Admins
+
+Users (normal)
+
+مع شارات (Badges) صغيرة بألوان مختلفة.
+
+5.3. إضافة مستخدم جديد
+
+نموذج أعلى الصفحة:
+
+Name
+
+Email
+
+Password
+
+اختيار Role.
+
+اختيار Allowed languages من LANGUAGES.
+
+Validation:
+
+كل الحقول مطلوبة.
+
+على الأقل لغة واحدة.
+
+الإيميل لا يكون مستخدمًا من قبل.
+
+SweetAlert:
+
+Confirmation قبل الإنشاء (يعرض تفاصيل اليوزر).
+
+بعد الإنشاء يعرض الإيميل + الباسورد.
+
+التخزين:
+
+يضيف المستخدم إلى state + saveUsers(next).
+
+5.4. قائمة المستخدمين
+
+لكل مستخدم:
+
+الاسم + Badge الدور (Admin/User).
+
+البريد الإلكتروني.
+
+عرض كلمة المرور الحالية (للديمو فقط).
+
+تاريخ الإنشاء (createdAt).
+
+الأزرار:
+
+Select Role:
+
+Dropdown لتغيير role مباشرة (user/admin).
+
+يحفظ فورًا في state + saveUsers.
+
+Edit:
+
+يفتح Modal صغير:
+
+name
+
+email
+
+password
+
+role (User/Admin) عبر buttons.
+
+عند الضغط على Save:
+
+يتحقق من:
+
+عدم ترك الحقول فارغة.
+
+عدم تكرار الإيميل مع يوزر آخر.
+
+SweetAlert للتأكيد:
+
+"هل أنت متأكد من حفظ التغييرات؟"
+
+إذا أكد:
+
+يحدّث اليوزر في users.
+
+saveUsers(next).
+
+يغلق المودال.
+
+رسالة نجاح صغيرة.
+
+Delete:
+
+SweetAlert:
+
+يعرض Name + Email.
+
+يؤكد الحذف.
+
+عند التأكيد:
+
+يزيل المستخدم من users.
+
+saveUsers(next).
+
+5.5. Allowed Languages لكل مستخدم
+
+قائمة من LANGUAGES تظهر أسفل بطاقة كل مستخدم.
+
+لكل لغة زر (Chip):
+
+مفعّل: لون Emerald.
+
+غير مفعّل: لون Slate.
+
+عند الضغط:
+
+SweetAlert:
+
+إضافة لغة لهذا المستخدم؟ / إزالة لغة من هذا المستخدم؟
+
+يحدث قائمة languages لليوزر في state + التخزين.
+
+6. التخزين (Storage Layer)
+
+ملف: lib/storage.ts (من الوصف لديك):
+
+مفاتيح ثابتة:
+
+VT_WORDS
+
+VT_STATS
+
+VT_USERS
+
+VT_CURRENT_LANGUAGE
+
+VT_CURRENT_USER_ID (أو vt_currentUserId في Auth)
+
+دوال (حسب الوصف):
+
+loadUsers() / saveUsers(users)
+
+loadWords() / saveWords(words) (غالبًا ضمن persistState)
+
+loadStats()
+
+loadCurrentLanguage(defaultId)
+
+persistState(words, stats, currentLanguageId)
+
+تحفظ كل شيء في localStorage.
+
+تعيد stats بعد أي تحديث.
+
+حاليًا التخزين مباشر على localStorage.
+خطة مستقبلية (بناءً على طلبك) هي إضافة طبقة Repository فوقها (مذكورة في Section 8).
+
+7. الـ TTS API
+
+ملف: app/api/tts/route.ts
+
+يستخدم:
+
+ELEVENLABS_API_KEY
+
+ELEVENLABS_VOICE_ID
+
+يأخذ نص (text) ويعيد:
+
+stream بصيغة audio/mpeg.
+
+يُستخدم في واجهات التدريب/الكلمات لتشغيل نطق الكلمة أو الجملة.
+
+8. الأشياء المنفّذة فعليًا حتى الآن (ملخّص)
+
+Layout عام للمشروع
+
+Providers: UI + AppState + Auth.
+
+TopBar يظهر في كل الصفحات (بنسخة خفيفة في /login).
+
+UiSettingsContext
+
+تغيير لغة الواجهة + الثيم.
+
+تخزين في localStorage.
+
+AuthContext
+
+currentUser + loading.
+
+تسجيل الدخول/الخروج.
+
+seeding للمستخدمين الافتراضيين:
+
+admin@example.com
+ / admin123
+
+user@example.com
+ / user123
+
+ضمان وجود هذه الحسابات حتى لو LocalStorage اتلخبط.
+
+AppStateContext
+
+إدارة الكلمات + الإحصائيات + اللغة الحالية.
+
+Spaced Repetition logic للكلمات.
+
+تخزين الكلمات والإحصائيات واللغة الحالية في localStorage.
+
+دعم تسجيلات صوتية لكل كلمة (recordingUrl).
+
+Login Page
+
+تصميم كامل ومتجاوب.
+
+يدعم تغيير لغة الواجهة والثيم.
+
+Auth متكامل مع AuthContext.
+
+SweetAlert للخطأ والنجاح.
+
+TopBar
+
+يظهر بيانات المستخدم الحالي والدور.
+
+زر Admin للمشرف.
+
+زر Logout مع SweetAlert تأكيد.
+
+يتعامل مع RTL/LTR و Dark/Light.
+
+Admin Dashboard
+
+عرض المستخدمين.
+
+إحصائيات بسيطة (إجمالي، Admins، Users).
+
+إضافة مستخدم جديد بكامل البيانات.
+
+تعديل الدور من القائمة.
+
+إدارة اللغات المسموح بها.
+
+حذف مستخدم مع تأكيد.
+
+تعديل بيانات المستخدم (name/email/password/role) من Modal مع تأكيد وValidation.
+
+9. الأشياء المخطّط لها/المتبقية (Roadmap)
+
+هذه النقاط هي ما طلبته في البداية ولم يُنفّذ بعد (أو نُفّذ جزئيًا):
+
+Route Guards / حماية المسارات
+
+مكونات أو Hooks مثل:
+
+<AdminOnly> يلف /admin/page.tsx:
+
+لو loading → Spinner.
+
+لو no user أو role !== 'admin' → redirect إلى /login + SweetAlert.
+
+<RedirectIfAuthenticated> يلف /login:
+
+لو user موجود:
+
+admin → /admin
+
+user → /
+
+حاليًا الحماية جزئية في بعض اللوجيك، لكن لم تُبنى كومبوننت منفصلة.
+
+RecordingActions Component
+
+ملف جديد: components/RecordingActions.tsx
+
+Props:
+
+recordingUrl: string
+
+fileName?: string
+
+onDelete: () => void
+
+يعرض:
+
+<audio controls />
+
+زر Download
+
+زر Delete (مع SweetAlert تأكيد).
+
+دمجه داخل WordsView لكل كلمة لها تسجيل.
+
+إضافة دالة في AppStateContext:
+
+updateWordRecording(wordId: string, recordingUrl: string | null).
+
+تحسين QuizView
+
+إضافة Modes:
+
+All words
+
+Due for review (nextReviewAt <= اليوم)
+
+New only (reviewCount = 0)
+
+إضافة Filter حسب Topic:
+
+"All topics" + قائمة بالـ topics المستخدمة.
+
+تطبيق هذه الفلاتر قبل بناء الأسئلة.
+
+تحسين StatsView
+
+عرض:
+
+إجمالي الأسئلة.
+
+إجمالي الإجابات الصحيحة.
+
+Accuracy عامة.
+
+Accuracy لكل لغة.
+
+Last activity لكل لغة (لو متاح).
+
+Mini chart بسيط (divs) تظهر نسبة الـ accuracy لكل لغة.
+
+تحسين Admin Dashboard بالفلاتر
+
+شريط تحكم فوق قائمة المستخدمين:
+
+Input للبحث (name/email).
+
+Filter by role:
+
+All / Admins / Users.
+
+Filter by language:
+
+All languages + قائمة LANGUAGES.
+
+استخدام useMemo لتطبيق الفلاتر قبل العرض.
+
+طبقة Repository فوق التخزين (Backend-ready)
+
+مثال:
+
+lib/repository/usersRepository.ts
+
+getAllUsers()
+
+createUser(...)
+
+updateUser(id, partial)
+
+deleteUser(id)
+
+lib/repository/wordsRepository.ts
+
+getAllWords()
+
+updateWord(id, partial)
+
+حاليًا كل شيء يستخدم storage.ts مباشرة.
+
+الهدف: جعل الـ API Async وجاهز للتبديل لباك إند حقيقي.
+
+توحيد استخدام SweetAlert2 في نقاط أخرى
+
+مسح تسجيل صوت.
+
+بعض الأحداث في Quiz/Stats عند Reset.
