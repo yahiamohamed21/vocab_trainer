@@ -1,165 +1,208 @@
 'use client';
 
+import { createContext, useContext, useEffect, useState } from 'react';
+import { AdminUser, InviteCode } from '@/lib/types';
 import {
-  createContext,
-  useContext,
-  useEffect,
-  useState,
-  ReactNode,
-} from 'react';
-import { AdminUser } from '@/lib/types';
-import { loadUsers, saveUsers } from '@/lib/storage';
-import { LANGUAGES } from '@/lib/constants';
+  loadUsers,
+  saveUsers,
+  safeGetItem,
+  safeSetItem,
+  loadInviteCodes,
+  saveInviteCodes,
+} from '@/lib/storage';
 
-type AuthContextValue = {
-  currentUser: AdminUser | null;
+interface AuthContextValue {
+  user: AdminUser | null;
   loading: boolean;
   login: (
     email: string,
     password: string
-  ) => Promise<{ ok: true; user: AdminUser } | { ok: false; error: string }>;
+  ) => Promise<{ ok: boolean; user?: AdminUser; error?: string }>;
+  signup: (
+    name: string,
+    email: string,
+    password: string,
+    inviteCode: string
+  ) => Promise<{ ok: boolean; user?: AdminUser; error?: string }>;
   logout: () => void;
-};
+  refreshUser: () => void;
+}
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
-const CURRENT_USER_KEY = 'vt_currentUserId';
+const STORAGE_KEY_SESSION = 'vocab_trainer_session_user';
 
-function createSeedAdmin(): AdminUser {
-  return {
-    id: 'seed-admin-1',
-    name: 'Super Admin',
-    email: 'admin@example.com',
-    password: 'admin123',
-    createdAt: new Date().toISOString(),
-    role: 'admin',
-    languages: LANGUAGES.map(l => l.id),
-  };
-}
-
-function createSeedUser(): AdminUser {
-  return {
-    id: 'seed-user-1',
-    name: 'Demo User',
-    email: 'user@example.com',
-    password: 'user123',
-    createdAt: new Date().toISOString(),
-    role: 'user',
-    languages: LANGUAGES.map(l => l.id),
-  };
-}
-
-export function AuthProvider({ children }: { children: ReactNode }) {
-  const [currentUser, setCurrentUser] = useState<AdminUser | null>(null);
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const [user, setUser] = useState<AdminUser | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // ================================
+  //   LOAD USER SESSION ON START
+  // ================================
   useEffect(() => {
-    try {
-      let users = loadUsers();
-
-      // تأكيد وجود الأدمن واليوزر الافتراضيين دائمًا بناءً على الإيميل
-      const hasSeedAdmin = users.some(
-        u => u.email.toLowerCase() === 'admin@example.com',
-      );
-      const hasSeedUser = users.some(
-        u => u.email.toLowerCase() === 'user@example.com',
-      );
-
-      const newUsers: AdminUser[] = [...users];
-      if (!hasSeedAdmin) {
-        newUsers.push(createSeedAdmin());
+    const raw = safeGetItem(STORAGE_KEY_SESSION);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as AdminUser;
+        setUser(parsed);
+      } catch {
+        setUser(null);
       }
-      if (!hasSeedUser) {
-        newUsers.push(createSeedUser());
-      }
-
-      if (!hasSeedAdmin || !hasSeedUser) {
-        saveUsers(newUsers);
-        users = newUsers;
-      }
-
-      const storedId =
-        typeof window !== 'undefined'
-          ? window.localStorage.getItem(CURRENT_USER_KEY)
-          : null;
-
-      if (!storedId) {
-        setCurrentUser(null);
-        setLoading(false);
-        return;
-      }
-
-      const user = users.find(u => u.id === storedId) || null;
-      setCurrentUser(user || null);
-    } catch {
-      setCurrentUser(null);
-    } finally {
-      setLoading(false);
     }
+    setLoading(false);
   }, []);
 
+  // ================================
+  //   LOGIN FUNCTION
+  // ================================
   async function login(email: string, password: string) {
+    const users = loadUsers();
     const trimmedEmail = email.trim().toLowerCase();
-    const trimmedPassword = password.trim();
+    const trimmedPass = password.trim();
 
-    let users = loadUsers();
+    const found = users.find(
+      (u) => u.email.toLowerCase() === trimmedEmail && u.password === trimmedPass
+    );
 
-    // نحاول نلاقي اليوزر بشكل عادي
-    let user =
-      users.find(
-        u =>
-          u.email.toLowerCase() === trimmedEmail &&
-          u.password === trimmedPassword,
-      ) || null;
+    if (!found) {
+      return {
+        ok: false,
+        error: 'البريد الإلكتروني أو كلمة المرور غير صحيحة',
+      };
+    }
 
-    // باكدور آمن في الديف: لو دخل الأدمن الافتراضي وما اتلاقاش في التخزين → نعيد إنشاءه
-    if (!user &&
-      trimmedEmail === 'admin@example.com' &&
-      trimmedPassword === 'admin123'
-    ) {
-      const existingAdmin = users.find(
-        u => u.email.toLowerCase() === 'admin@example.com',
-      );
+    // حفظ الجلسة
+    safeSetItem(STORAGE_KEY_SESSION, JSON.stringify(found));
+    setUser(found);
 
-      if (existingAdmin) {
-        user = existingAdmin;
-      } else {
-        const seedAdmin = createSeedAdmin();
-        users = [...users, seedAdmin];
-        saveUsers(users);
-        user = seedAdmin;
+    return { ok: true, user: found };
+  }
+
+  // ================================
+  //   SIGNUP FUNCTION (WITH INVITE)
+  // ================================
+  async function signup(
+    name: string,
+    email: string,
+    password: string,
+    inviteCode: string
+  ) {
+    const trimmedName = name.trim();
+    const trimmedEmail = email.trim().toLowerCase();
+    const trimmedPass = password.trim();
+    const trimmedCode = inviteCode.trim();
+
+    // تحميل المستخدمين الحاليين
+    const users = loadUsers();
+
+    // التحقق من أن الإيميل غير مستخدم من قبل
+    const emailExists = users.some(
+      (u) => u.email.toLowerCase() === trimmedEmail
+    );
+    if (emailExists) {
+      return {
+        ok: false,
+        error: 'هذا البريد الإلكتروني مسجل بالفعل',
+      };
+      }
+
+    // تحميل أكواد الدعوة
+    const inviteCodes = loadInviteCodes();
+
+    // البحث عن كود الدعوة
+    const invite = inviteCodes.find(
+      (c) => c.code.trim().toLowerCase() === trimmedCode.toLowerCase()
+    );
+
+    if (!invite) {
+      return {
+        ok: false,
+        error: 'كود الدعوة غير صحيح، يرجى مراجعة الأدمن',
+      };
+    }
+
+    if (invite.used) {
+      return {
+        ok: false,
+        error: 'هذا الكود تم استخدامه من قبل، يرجى مراجعة الأدمن',
+      };
+    }
+
+    // إنشاء المستخدم الجديد، اللغات تأتي من كود الدعوة
+    const now = new Date().toISOString();
+    const id =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : String(Date.now());
+
+    const newUser: AdminUser = {
+      id,
+      name: trimmedName,
+      email: trimmedEmail,
+      password: trimmedPass,
+      createdAt: now,
+      languages: invite.languages ?? [],
+      role: 'user',
+    };
+
+    // حفظ المستخدمين
+    const updatedUsers = [...users, newUser];
+    saveUsers(updatedUsers);
+
+    // تحديث حالة كود الدعوة
+    const updatedInviteCodes: InviteCode[] = inviteCodes.map((c) =>
+      c.code === invite.code
+        ? {
+            ...c,
+            used: true,
+            usedBy: trimmedEmail,
+          }
+        : c
+    );
+    saveInviteCodes(updatedInviteCodes);
+
+    // بدء جلسة للمستخدم الجديد مباشرة
+    safeSetItem(STORAGE_KEY_SESSION, JSON.stringify(newUser));
+    setUser(newUser);
+
+    return { ok: true, user: newUser };
+  }
+
+  // ================================
+  //   LOGOUT FUNCTION
+  // ================================
+  function logout() {
+    safeSetItem(STORAGE_KEY_SESSION, '');
+    setUser(null);
+  }
+
+  // ================================
+  //   REFRESH SESSION FROM STORAGE
+  // ================================
+  function refreshUser() {
+    const raw = safeGetItem(STORAGE_KEY_SESSION);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as AdminUser;
+        setUser(parsed);
+      } catch {
+        setUser(null);
       }
     }
-
-    if (!user) {
-      return { ok: false as const, error: 'INVALID_CREDENTIALS' };
-    }
-
-    setCurrentUser(user);
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(CURRENT_USER_KEY, user.id);
-    }
-
-    return { ok: true as const, user };
   }
 
-  function logout() {
-    setCurrentUser(null);
-    if (typeof window !== 'undefined') {
-      window.localStorage.removeItem(CURRENT_USER_KEY);
-    }
-  }
-
-  const value: AuthContextValue = {
-    currentUser,
-    loading,
-    login,
-    logout,
-  };
-
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider
+      value={{ user, loading, login, signup, logout, refreshUser }}
+    >
+      {children}
+    </AuthContext.Provider>
+  );
 }
 
+// ================================
+//   HOOK
+// ================================
 export function useAuth() {
   const ctx = useContext(AuthContext);
   if (!ctx) {

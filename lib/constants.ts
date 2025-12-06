@@ -8,8 +8,11 @@ export interface LanguageConfig {
   ttsCode: string;      // كود اللغة لنطق TTS
 }
 
-// اللغات المتاحة في التطبيق
-export const LANGUAGES: LanguageConfig[] = [
+/**
+ * اللغات الافتراضية في التطبيق
+ * نستخدمها كقائمة أساس (fallback) لو مفيش لغات متخزنة في localStorage
+ */
+export const DEFAULT_LANGUAGES: LanguageConfig[] = [
   {
     id: 'en',
     label: 'English',
@@ -48,8 +51,22 @@ export const LANGUAGES: LanguageConfig[] = [
   },
 ];
 
+/**
+ * للحفاظ على التوافق مع الكود القديم:
+ * LANGUAGES تبدأ باللغات الافتراضية، وبعد كده
+ * تقدر تستخدم loadAppLanguages من storage علشان تجيب النسخة المعدّلة.
+ */
+export const LANGUAGES: LanguageConfig[] = DEFAULT_LANGUAGES;
+
 // مفاتيح التخزين في localStorage
 export const STORAGE_KEY_WORDS = 'vocab_trainer_words_v1';
 export const STORAGE_KEY_STATS = 'vocab_trainer_stats_v1';
 export const STORAGE_KEY_LANG  = 'vocab_trainer_current_lang_v1';
-export const STORAGE_KEY_USERS = 'vocab_trainer_admin_users_v1'; // المستخدمين (للأدمن)
+export const STORAGE_KEY_USERS = 'vocab_trainer_admin_users_v1';
+export const STORAGE_KEY_INVITES = 'vocab_trainer_invite_codes_v1';
+
+// لغات مفعّلة/معطّلة (لو حابب تستخدم feature الـ enable/disable)
+export const STORAGE_KEY_ENABLED_LANGS = 'vocab_trainer_enabled_langs_v1';
+
+// قائمة لغات التطبيق اللي الأدمن يقدر يعدّلها (إضافة/حذف)
+export const STORAGE_KEY_APP_LANGUAGES = 'vocab_trainer_app_languages_v1';

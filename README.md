@@ -395,3 +395,16 @@ npm run lint
 🎉 استمتع بتطوير مهاراتك في اللغات والنطق!
 
 
+GITHUB 
+ أول مرة:
+git init
+git remote add origin https://github.com/USERNAME/REPO.git
+git add .
+git commit -m "Initial commit"
+git branch -M main   (او تجاهلها لو master)
+git push -u origin main (او master)
+
+كل مرة بعد كده:
+git add .
+git commit -m "update"
+git push

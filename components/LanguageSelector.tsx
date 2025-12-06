@@ -11,23 +11,29 @@ import type { LanguageId } from '@/lib/types';
 export default function LanguageSelector() {
   const { currentLanguageId, setCurrentLanguageId } = useAppState();
   const { uiLang } = useUiSettings();
-  const { currentUser } = useAuth();
+  const { user } = useAuth();
 
   const isAr = uiLang === 'ar';
+  const isAdmin = user?.role === 'admin';
 
   // حساب اللغات المسموح بها حسب اليوزر
   const allowedLanguageIds: LanguageId[] = useMemo(() => {
-    // لو مفيش يوزر (ضيف) أو مفيش لغات محددة له → كل اللغات متاحة
-    if (!currentUser || !currentUser.languages || currentUser.languages.length === 0) {
+    // لو مفيش يوزر (ضيف) أو يوزر أدمن → كل اللغات متاحة
+    if (!user || isAdmin) {
+      return LANGUAGES.map(l => l.id);
+    }
+
+    // لو يوزر عادي: نستخدم اللغات اللي محددها له الأدمن
+    if (!user.languages || user.languages.length === 0) {
       return LANGUAGES.map(l => l.id);
     }
 
     const validIds = new Set(LANGUAGES.map(l => l.id));
-    const filtered = currentUser.languages.filter(id => validIds.has(id));
+    const filtered = user.languages.filter(id => validIds.has(id));
 
     // لو الأدمن حاطط IDs مش موجودة في LANGUAGES لأي سبب → fallback لكل اللغات
     return filtered.length > 0 ? filtered : LANGUAGES.map(l => l.id);
-  }, [currentUser]);
+  }, [user, isAdmin]);
 
   // اللغات اللي فعلاً هتظهر في السيلكتور
   const visibleLanguages = useMemo(
@@ -50,7 +56,7 @@ export default function LanguageSelector() {
     visibleLanguages[0] ||
     LANGUAGES[0];
 
-  const isGuest = !currentUser;
+  const isGuest = !user;
 
   const mainLine = isAr
     ? 'لغة التدريب الحالية: '
@@ -60,6 +66,10 @@ export default function LanguageSelector() {
     ? isAr
       ? 'جميع اللغات متاحة لأنك تستخدم التطبيق كضيف.'
       : 'All languages are available because you are using the app as a guest.'
+    : isAdmin
+    ? isAr
+      ? 'يمكنك الوصول إلى جميع اللغات بصلاحيات الأدمن.'
+      : 'You can access all languages as an admin.'
     : isAr
     ? `يمكنك الوصول إلى ${visibleLanguages.length} لغة حددها لك الأدمن.`
     : `You can access ${visibleLanguages.length} languages assigned by the admin.`;

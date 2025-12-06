@@ -19,8 +19,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html lang="en">
       <body className="min-h-screen bg-slate-950 text-slate-50 antialiased">
         <UiSettingsProvider>
-          <AppStateProvider>
-            <AuthProvider>
+          <AuthProvider>
+            <AppStateProvider>
               {/* التوب بار + المحتوى */}
               <div className="min-h-screen flex flex-col">
                 <TopBar />
@@ -28,8 +28,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                   {children}
                 </main>
               </div>
-            </AuthProvider>
-          </AppStateProvider>
+            </AppStateProvider>
+          </AuthProvider>
         </UiSettingsProvider>
       </body>
     </html>

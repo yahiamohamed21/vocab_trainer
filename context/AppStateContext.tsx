@@ -1,6 +1,7 @@
 // context/AppStateContext.tsx
 'use client';
 
+
 import React, {
   createContext,
   useContext,
@@ -16,6 +17,7 @@ import {
   loadWords,
   persistState,
 } from '@/lib/storage';
+import { useAuth } from '@/context/AuthContext';
 
 interface AppStateContextValue extends AppState {
   initialized: boolean;
@@ -72,6 +74,7 @@ function computeSpacedRepetition(word: Word, correct: boolean) {
 }
 
 export function AppStateProvider({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
   const [initialized, setInitialized] = useState(false);
   const [words, setWords] = useState<Word[]>([]);
   const [stats, setStats] = useState(defaultStats);
@@ -91,6 +94,19 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setStats(loadedStats);
     setInitialized(true);
   }, []);
+
+  // التأكد من أن currentLanguageId ضمن اللغات المسموح بها لليوزر (غير الأدمن)
+  useEffect(() => {
+    if (!initialized) return;
+    if (!user || user.role === 'admin') return;
+
+    const allowedLangs = user.languages ?? [];
+    if (!allowedLangs.length) return;
+
+    if (!allowedLangs.includes(currentLanguageId)) {
+      setCurrentLanguageIdState(allowedLangs[0]);
+    }
+  }, [initialized, user, currentLanguageId]);
 
   // حفظ الحالة في localStorage عند أي تغيير بعد التهيئة
   useEffect(() => {
@@ -156,6 +172,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const setCurrentLanguageId = (langId: AppState['currentLanguageId']) => {
     const exists = LANGUAGES.some(l => l.id === langId);
     if (!exists) return;
+
+    // لو المستخدم ليس أدمن → يقتصر على اللغات المسموح بها
+    if (user && user.role !== 'admin') {
+      const allowedLangs = user.languages ?? [];
+      if (!allowedLangs.includes(langId)) return;
+    }
+
     setCurrentLanguageIdState(langId);
   };
 
