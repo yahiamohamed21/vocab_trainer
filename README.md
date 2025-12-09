@@ -398,7 +398,7 @@ npm run lint
 GITHUB 
  أول مرة:
 git init
-git remote add origin https://github.com/USERNAME/REPO.git
+git remote add origin https://github.com/yahiamohamed21/vocab_trainer
 git add .
 git commit -m "Initial commit"
 git branch -M main   (او تجاهلها لو master)
