@@ -21,7 +21,8 @@ interface RecordingActionsProps {
   recordingUrl?: string | null;     // URL محلي (Data URL أو blob URL)، لو موجود
   fileName: string;                 // اسم الملف عند التحميل
   wordId?: string;                  // مطلوب لمود الـ Backend
-  onDeleteLocal?: () => void;       // حذف محلي للضيف
+  onDeleteLocal?: () => void;   
+  onDelete?: () => void;    // حذف محلي للضيف
 }
 
 function getAccessToken(): string | null {
