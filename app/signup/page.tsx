@@ -1,3 +1,4 @@
+// app/signup/page.tsx
 'use client';
 
 import { FormEvent, useState } from 'react';
@@ -53,9 +54,9 @@ export default function SignupPage() {
 
     const swalBase = isDark ? swalDark : {};
 
-    // 1) Validate fields
+    // validation بسيطة قبل ضرب الـ backend
     if (!trimmedName || !trimmedEmail || !trimmedPassword || !trimmedCode) {
-      Swal.fire({
+      await Swal.fire({
         ...swalBase,
         icon: 'warning',
         title: isAr ? 'البيانات غير مكتملة' : 'Missing data',
@@ -65,21 +66,41 @@ export default function SignupPage() {
       return;
     }
 
-    // 2) Call AuthContext.signup (handles invite code + users + session)
-    const result = await signup(trimmedName, trimmedEmail, trimmedPassword, trimmedCode);
-
-    if (!result.ok) {
-      Swal.fire({
+    if (trimmedPassword.length < 6) {
+      await Swal.fire({
         ...swalBase,
-        icon: 'error',
-        title: isAr ? 'خطأ في إنشاء الحساب' : 'Signup error',
-        text: result.error || (isAr ? 'حدث خطأ غير متوقع.' : 'An unexpected error occurred.'),
+        icon: 'warning',
+        title: isAr ? 'كلمة المرور ضعيفة' : 'Weak password',
+        text: isAr
+          ? 'كلمة المرور يجب أن تكون ٦ أحرف على الأقل.'
+          : 'Password must be at least 6 characters.',
       });
       setSubmitting(false);
       return;
     }
 
-    // 3) Success alert
+    // Call AuthContext.signup (هي اللي هنوصلها بالباك إند)
+    const result = await signup(
+      trimmedName,
+      trimmedEmail,
+      trimmedPassword,
+      trimmedCode
+    );
+
+    if (!result.ok) {
+      await Swal.fire({
+        ...swalBase,
+        icon: 'error',
+        title: isAr ? 'خطأ في إنشاء الحساب' : 'Signup error',
+        text:
+          result.error ||
+          (isAr ? 'حدث خطأ غير متوقع.' : 'An unexpected error occurred.'),
+      });
+      setSubmitting(false);
+      return;
+    }
+
+    // Success alert
     await Swal.fire({
       ...swalBase,
       icon: 'success',
@@ -91,15 +112,14 @@ export default function SignupPage() {
       showConfirmButton: false,
     });
 
-    // 4) Redirect to main app page
-    router.replace('/');
+    // بعد التسجيل → على صفحة المستخدم مباشرة
+    router.replace('/user');
     setSubmitting(false);
   }
 
   // ===========================================================
   // UI DESIGN – dark / light modes
   // ===========================================================
-
   return (
     <div
       className="relative flex-1 flex items-center justify-center px-4 py-10 overflow-hidden"
@@ -181,7 +201,9 @@ export default function SignupPage() {
                   isDark ? 'text-slate-50' : 'text-slate-900'
                 }`}
               >
-                {isAr ? 'طوّر حصيلتك اللغوية خطوة بخطوة' : 'Grow your vocabulary, step by step'}
+                {isAr
+                  ? 'طوّر حصيلتك اللغوية خطوة بخطوة'
+                  : 'Grow your vocabulary, step by step'}
               </h1>
               <p
                 className={`text-xs leading-relaxed ${
@@ -258,7 +280,7 @@ export default function SignupPage() {
                     isDark ? 'text-slate-400' : 'text-slate-500'
                   }`}
                 >
-                  {isAr ? 'محفوظ محليًا' : 'Stored locally'}
+                  {isAr ? 'محفوظ على حسابك' : 'Linked to your account'}
                 </div>
               </div>
             </div>
@@ -271,8 +293,8 @@ export default function SignupPage() {
               </p>
               <p className={isDark ? 'text-slate-500' : 'text-slate-500'}>
                 {isAr
-                  ? 'يمكنك تغيير اللغة ونسق الواجهة في أي وقت من الإعدادات.'
-                  : 'You can switch UI language and theme any time from the settings.'}
+                  ? 'يمكنك تغيير لغة الواجهة ونسق الألوان من داخل التطبيق في أي وقت.'
+                  : 'You can change UI language and theme from inside the app at any time.'}
               </p>
             </div>
           </div>
@@ -506,8 +528,8 @@ export default function SignupPage() {
               }`}
             >
               {isAr
-                ? 'بإنشائك حساباً، فأنت تقر باستخدام هذا الحساب لتتبع تقدّمك في المفردات فقط على هذا الجهاز.'
-                : 'By creating an account, you agree that your vocab progress is stored locally on this device only.'}
+                ? 'بإنشائك حساباً، فأنت تقر باستخدام هذا الحساب لتتبع تقدّمك في المفردات داخل التطبيق.'
+                : 'By creating an account, you agree to use this account to track your vocabulary progress inside the app.'}
             </div>
           </div>
         </section>

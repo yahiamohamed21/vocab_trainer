@@ -72,44 +72,33 @@ export default function LoginPage() {
   // ==========================
   //     تسجيل الدخول
   // ==========================
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (submitting) return;
-    setSubmitting(true);
+async function handleSubmit(e: FormEvent) {
+  e.preventDefault();
+  if (submitting) return;
+  setSubmitting(true);
 
-    const swalBase = isDark ? swalDarkBase : {};
+  const swalBase = isDark ? swalDarkBase : {};
 
-    const result = await login(email, password);
+  const trimmedEmail = email.trim();
+  const trimmedPassword = password.trim();
 
-    if (!result.ok || !result.user) {
-      await Swal.fire({
-        ...swalBase,
-        icon: 'error',
-        title: t.wrongCredTitle,
-        text: result.error || t.wrongCredText,
-      });
-      setSubmitting(false);
-      return;
-    }
+  const result = await login(trimmedEmail, trimmedPassword);
 
-    const user = result.user;
+  if (!result.ok || !result.user) {
+    await Swal.fire({
+      ...swalBase,
+      icon: 'error',
+      title: t.wrongCredTitle,
+      text: result.error || t.wrongCredText,
+    });
+    setSubmitting(false);
+    return;
+  }
 
-    // أدمن → يذهب للوحة التحكم
-    if (user.role === 'admin') {
-      await Swal.fire({
-        ...swalBase,
-        icon: 'success',
-        title: t.successTitle,
-        timer: 1000,
-        showConfirmButton: false,
-      });
+  const user = result.user;
 
-      router.replace('/admin');
-      setSubmitting(false);
-      return;
-    }
-
-    // مستخدم عادي → يذهب مباشرة للتطبيق الرئيسي
+  // أدمن → يذهب للوحة التحكم
+  if (user.role === 'admin') {          // لاحظ: small letters
     await Swal.fire({
       ...swalBase,
       icon: 'success',
@@ -118,13 +107,23 @@ export default function LoginPage() {
       showConfirmButton: false,
     });
 
-    router.replace('/user');
+    router.replace('/admin');           // المسار الصحيح للصفحة
     setSubmitting(false);
+    return;
   }
 
-  // =====================================================
-  //     واجهة تسجيل الدخول (UI)
-  // =====================================================
+  // مستخدم عادي → يذهب مباشرة للتطبيق الرئيسي
+  await Swal.fire({
+    ...swalBase,
+    icon: 'success',
+    title: t.successTitle,
+    timer: 1000,
+    showConfirmButton: false,
+  });
+
+  router.replace('/user');              // أو '/' لو حابب
+  setSubmitting(false);
+}
   return (
     <div
       className="relative flex-1 flex items-center justify-center px-4 py-10 overflow-hidden"
@@ -427,9 +426,7 @@ export default function LoginPage() {
               </p>
             </div>
 
-            {/* ================================
-                الفورم
-            ================================= */}
+            {/* الفورم */}
             <form onSubmit={handleSubmit} className="space-y-3 mt-1">
               {/* Email */}
               <div className="space-y-1">

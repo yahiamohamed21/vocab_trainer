@@ -196,6 +196,19 @@ export default function LandingPage() {
               >
                 {isAr ? 'لدي حساب مسبقاً' : 'I already have an account'}
               </button>
+
+              {/* زر التجربة المجانية كضيف */}
+              <button
+                type="button"
+                onClick={() => router.push('/user')}
+                className={`inline-flex items-center gap-2 rounded-full border px-4 py-2.5 text-xs md:text-sm font-medium transition-colors ${
+                  isDark
+                    ? 'border-violet-500/70 bg-violet-500/10 text-violet-100 hover:bg-violet-500/20'
+                    : 'border-violet-300 bg-violet-50 text-violet-700 hover:bg-violet-100'
+                }`}
+              >
+                {isAr ? 'التجربة المجانية كضيف' : 'Try as guest'}
+              </button>
             </div>
 
             <p

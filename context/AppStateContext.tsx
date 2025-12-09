@@ -1,7 +1,6 @@
 // context/AppStateContext.tsx
 'use client';
 
-
 import React, {
   createContext,
   useContext,
@@ -16,6 +15,7 @@ import {
   loadStats,
   loadWords,
   persistState,
+  safeGetItem,
 } from '@/lib/storage';
 import { useAuth } from '@/context/AuthContext';
 
@@ -41,6 +41,77 @@ const defaultStats: AppState['stats'] = {
   correctAnswers: 0,
   lastQuizDate: null,
 };
+
+// ثوابت خاصة بالـ API / الجلسة (نفس المفتاح المستخدم في AuthContext)
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_BASE_URL ??
+  'http://vocabtrainerapi.runasp.net';
+
+const STORAGE_KEY_SESSION = 'vocab_trainer_session_user';
+
+interface StoredSession {
+  user?: any;
+  accessToken?: string | null;
+  refreshToken?: string | null;
+}
+
+// دالة للحصول على الـ accessToken من الجلسة المخزنة
+function getAccessToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  const raw = safeGetItem(STORAGE_KEY_SESSION);
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw) as StoredSession;
+    if (parsed && typeof parsed === 'object') {
+      // نفس الحماية المستخدمة في باقي الملفات
+      return (
+        (parsed as any).accessToken ??
+        (parsed as any).token ??
+        (parsed as any).jwt ??
+        null
+      );
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+// دالة بسيطة لنداء الـ API مع Authorization (تستخدم هنا فقط في مزامنة الكلمات)
+async function syncWordToBackend(args: {
+  languageId: string;
+  text: string;
+  translation?: string;
+  example?: string;
+  topic?: string;
+}) {
+  const token = getAccessToken();
+  if (!token) {
+    // لو مفيش توكن، نكتفي بالحفظ المحلي
+    return;
+  }
+
+  try {
+    await fetch(`${API_BASE_URL}/api/words/create`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        languageId: args.languageId,
+        text: args.text,
+        translation: args.translation?.trim() || null,
+        example: args.example?.trim() || null,
+        topic: args.topic?.trim() || null,
+      }),
+    });
+    // في الوقت الحالي مش مهم نقرأ الرد؛ يكفي المزامنة البسيطة
+  } catch (error) {
+    console.error('Failed to sync word with backend:', error);
+  }
+}
 
 // دالة لحساب الـ interval الجديد و nextReviewAt (Spaced Repetition)
 function computeSpacedRepetition(word: Word, correct: boolean) {
@@ -117,10 +188,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   }, [words, currentLanguageId, initialized]);
 
   const addOrUpdateWord = (data: Partial<Word> & { text: string }) => {
-    setWords(prev => {
-      const trimmedText = data.text.trim();
-      if (!trimmedText) return prev;
+    const trimmedText = data.text.trim();
+    if (!trimmedText) return;
 
+    // أولاً: تحديث الحالة المحلية (مهم للضيف وTrainingView وStatsView المحلي)
+    setWords(prev => {
       const existingIndex = prev.findIndex(
         w => w.text === trimmedText && w.languageId === currentLanguageId
       );
@@ -131,15 +203,19 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         const word = updated[existingIndex];
         updated[existingIndex] = {
           ...word,
-          translation: data.translation ?? word.translation,
-          example: data.example ?? word.example,
-          topic: data.topic ?? word.topic,
+          translation:
+            data.translation !== undefined
+              ? data.translation ?? ''
+              : word.translation,
+          example:
+            data.example !== undefined ? data.example ?? '' : word.example,
+          topic: data.topic !== undefined ? data.topic ?? '' : word.topic,
           // recordingUrl وغيره يفضلوا كما هم
         };
         return updated;
       }
 
-      // إضافة كلمة جديدة
+      // إضافة كلمة جديدة محليًا
       const now = new Date().toISOString();
       const newWord: Word = {
         id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -159,14 +235,28 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       };
       return [newWord, ...prev];
     });
+
+    // ثانياً: لو فيه مستخدم مسجّل → مزامنة مع الـ Backend
+    if (user) {
+      // fire-and-forget: مش محتاجين نعمل await من ناحية الـ UI
+      syncWordToBackend({
+        languageId: currentLanguageId,
+        text: trimmedText,
+        translation: data.translation ?? undefined,
+        example: data.example ?? undefined,
+        topic: data.topic ?? undefined,
+      });
+    }
   };
 
   const deleteWord = (id: string) => {
     setWords(prev => prev.filter(w => w.id !== id));
+    // ملاحظة: حذف الكلمة من الـ Backend للمستخدم المسجَّل يتم من WordsView نفسه
   };
 
   const deleteWordsForCurrentLanguage = () => {
     setWords(prev => prev.filter(w => w.languageId !== currentLanguageId));
+    // ملاحظة: حذف كل كلمات اللغة من الـ Backend يتم من WordsView للمستخدم المسجَّل
   };
 
   const setCurrentLanguageId = (langId: AppState['currentLanguageId']) => {
@@ -221,7 +311,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     }));
   };
 
-  // حفظ تسجيل صوتي لكلمة معينة (بالنص + اللغة الحالية)
+  // حفظ تسجيل صوتي لكلمة معينة (بالنص + اللغة الحالية) — محليًا
   const saveRecordingForWord = (rawText: string, recordingUrl: string) => {
     const trimmedText = rawText.trim();
     if (!trimmedText) return;
@@ -268,8 +358,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     });
   };
 
-  // تحديث تسجيل كلمة موجودة عن طريق id (مسح أو تعديل)
-  const updateWordRecording = (wordId: string, recordingUrl: string | null) => {
+  // تحديث تسجيل كلمة موجودة عن طريق id (مسح أو تعديل) — محليًا
+  const updateWordRecording = (
+    wordId: string,
+    recordingUrl: string | null
+  ) => {
     setWords(prev =>
       prev.map(w =>
         w.id === wordId

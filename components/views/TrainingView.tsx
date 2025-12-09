@@ -1,4 +1,3 @@
-// components/views/TrainingView.tsx
 'use client';
 
 import { useState, useMemo, useRef, useEffect } from 'react';
@@ -7,9 +6,26 @@ import { Mic, StopCircle, Activity, X } from 'lucide-react';
 import { LANGUAGES } from '@/lib/constants';
 import { useAppState } from '@/context/AppStateContext';
 import { useUiSettings } from '@/context/UiSettingsContext';
-import { Word } from '@/lib/types';
+import { useAuth } from '@/context/AuthContext';
+import { safeGetItem } from '@/lib/storage';
+import type { Word } from '@/lib/types';
+import { post, ApiError } from '@/lib/api/httpClient';
 
-// تحويل Blob إلى Data URL لتخزينه في localStorage
+// ✅ API Base URL
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  'http://vocabtrainerapi.runasp.net';
+
+const SESSION_STORAGE_KEY = 'vocab_trainer_session_user';
+
+type StoredSession = {
+  user?: any;
+  accessToken?: string | null;
+  refreshToken?: string | null;
+};
+
+//=============== Helpers ===============//
+
 async function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -19,40 +35,140 @@ async function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
+function getAccessTokenFromSession(): string | null {
+  const raw = safeGetItem(SESSION_STORAGE_KEY);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as StoredSession;
+    if (parsed && typeof parsed === 'object') {
+      return (parsed as any).accessToken ?? null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function findWordIdInBackend(
+  languageId: string,
+  text: string,
+): Promise<string | null> {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+
+  try {
+    const payload = await post<any>('/api/words/list', {
+      languageId,
+      search: trimmed,
+    });
+
+    let list: any[] = [];
+    if (Array.isArray(payload)) {
+      list = payload;
+    } else if (Array.isArray(payload.items)) {
+      list = payload.items;
+    } else if (Array.isArray(payload.words)) {
+      list = payload.words;
+    }
+
+    const lowered = trimmed.toLowerCase();
+    const hit = list.find((w: any) =>
+      (w.text ?? w.word ?? '')
+        .toString()
+        .trim()
+        .toLowerCase()
+        .includes(lowered),
+    );
+
+    if (!hit) return null;
+    const id = hit.id ?? hit.wordId ?? hit.guid;
+    return id ? String(id) : null;
+  } catch (error) {
+    console.error('findWordIdInBackend error:', error);
+    return null;
+  }
+}
+
+async function ensureWordIdInBackend(
+  languageId: string,
+  text: string,
+): Promise<string | null> {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+
+  let id = await findWordIdInBackend(languageId, trimmed);
+  if (id) return id;
+
+  try {
+    await post('/api/words/create', {
+      languageId,
+      text: trimmed,
+      translation: null,
+      example: null,
+      topic: null,
+    });
+  } catch (error) {
+    console.error('ensureWordIdInBackend create error:', error);
+    return null;
+  }
+
+  id = await findWordIdInBackend(languageId, trimmed);
+  return id;
+}
+
 export default function TrainingView() {
-  const { words, currentLanguageId, addOrUpdateWord, saveRecordingForWord } =
-    useAppState();
-  const { uiLang } = useUiSettings();
+  const {
+    words,
+    currentLanguageId,
+    addOrUpdateWord,
+    saveRecordingForWord,
+  } = useAppState();
+  const { uiLang, theme } = useUiSettings();
+  const { user } = useAuth();
+
   const isAr = uiLang === 'ar';
+  const isDark = theme === 'dark';
+  const isGuest = !user;
 
   const [text, setText] = useState('');
   const [repeat, setRepeat] = useState(3);
   const [rate, setRate] = useState(0.7);
-  const [status, setStatus] = useState('');
+  const [status, setStatus] = useState(
+    isAr ? 'اكتب كلمة ثم ابدأ التكرار.' : 'Type a word then start repeating.',
+  );
   const [speaking, setSpeaking] = useState(false);
   const speakingRef = useRef(false);
 
-  // أصوات TTS للمتصفح (fallback)
+  // ✅ Auto translation (always to Arabic)
+  const [autoTranslation, setAutoTranslation] = useState<string | null>(null);
+  const [autoTransLoading, setAutoTransLoading] = useState(false);
+  const [autoTransError, setAutoTransError] = useState<string | null>(null);
+
+  // ✅ Browser TTS voices
   const [availableVoices, setAvailableVoices] =
     useState<SpeechSynthesisVoice[]>([]);
   const [selectedVoiceIndex, setSelectedVoiceIndex] = useState<string>('0');
   const [voiceWarning, setVoiceWarning] = useState<string | null>(null);
 
-  // تسجيل صوت المستخدم
+  // ✅ Recording
   const [recordingSupported, setRecordingSupported] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [recordedUrl, setRecordedUrl] = useState<string | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
-  // صوت خارجي (TTS API)
+  // External audio (backend TTS)
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  const currentLang = LANGUAGES.find(l => l.id === currentLanguageId)!;
+  const currentLang = useMemo(
+    () => LANGUAGES.find(l => l.id === currentLanguageId) ?? null,
+    [currentLanguageId],
+  );
+
   const ttsSupported =
     typeof window !== 'undefined' && 'speechSynthesis' in window;
 
-  // دعم التسجيل
+  // ✅ Mic support
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const supported =
@@ -60,70 +176,139 @@ export default function TrainingView() {
     setRecordingSupported(supported);
   }, []);
 
-  // تحميل الأصوات (للـ fallback)
+  // ✅ Load + filter voices for current language
   useEffect(() => {
-    if (!ttsSupported) return;
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    if (!currentLang?.ttsCode) return;
+
     const synth = window.speechSynthesis;
 
-    const handleVoices = () => {
-      let all = synth.getVoices();
-      if (!all || !all.length) return;
+    function loadVoices() {
+      const all = synth.getVoices() || [];
+      setAvailableVoices(all);
 
-      const seen = new Set<string>();
-      const uniq: SpeechSynthesisVoice[] = [];
-      for (const v of all) {
-        const id = `${v.name}|${v.lang}|${v.voiceURI}`;
-        if (seen.has(id)) continue;
-        seen.add(id);
-        uniq.push(v);
-      }
-
-      const mainLangCode = currentLang.ttsCode.split('-')[0].toLowerCase();
-      const filtered = uniq.filter(v =>
-        v.lang?.toLowerCase().startsWith(mainLangCode)
-      );
-
-      const voicesToUse = filtered.length ? filtered : uniq;
-      setAvailableVoices(voicesToUse);
-
-      if (filtered.length === 0) {
+      if (!all.length) {
         setVoiceWarning(
           isAr
-            ? 'لا يوجد صوت متاح لهذه اللغة على جهازك، سيتم استخدام صوت افتراضي (غالبًا إنجليزي).'
-            : 'No native voice is available for this language on your device; a fallback (probably English) will be used.'
+            ? 'الأصوات لم تُحمّل بعد. جرّب إعادة تحميل الصفحة.'
+            : 'Voices are not loaded yet. Try reloading.',
         );
-      } else {
-        setVoiceWarning(null);
+        return;
       }
 
-      setSelectedVoiceIndex(prev => {
-        const idx = Number(prev);
-        if (!Number.isNaN(idx) && voicesToUse[idx]) return prev;
-        return voicesToUse.length ? '0' : '';
-      });
-    };
+      const prefix = currentLang.ttsCode.split('-')[0].toLowerCase();
+      const matches = all.filter(v =>
+        (v.lang || '').toLowerCase().startsWith(prefix),
+      );
 
-    handleVoices();
-    synth.addEventListener('voiceschanged', handleVoices);
+      if (matches.length === 0) {
+        setVoiceWarning(
+          isAr
+            ? 'لم نجد صوت متصفح مناسب للغة الحالية، سيتم استخدام أي صوت.'
+            : 'No matching browser voice for this language, any voice will be used.',
+        );
+        setSelectedVoiceIndex('0');
+        return;
+      }
+
+      setVoiceWarning(null);
+
+      const firstMatchIndex = all.findIndex(v =>
+        (v.lang || '').toLowerCase().startsWith(prefix),
+      );
+
+      if (firstMatchIndex >= 0) {
+        setSelectedVoiceIndex(String(firstMatchIndex));
+      }
+    }
+
+    loadVoices();
+    synth.onvoiceschanged = loadVoices;
+
     return () => {
-      synth.removeEventListener('voiceschanged', handleVoices);
+      synth.onvoiceschanged = null;
     };
-  }, [currentLanguageId, currentLang.ttsCode, ttsSupported, isAr]);
+  }, [currentLang?.ttsCode, isAr]);
 
-  // آخر الكلمات
+  // ✅ Auto translate when text changes (always to Arabic)
+  useEffect(() => {
+    const trimmed = text.trim();
+    if (!trimmed) {
+      setAutoTranslation(null);
+      setAutoTransError(null);
+      setAutoTransLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const currentText = trimmed;
+
+    const timer = setTimeout(async () => {
+      setAutoTransLoading(true);
+      setAutoTransError(null);
+
+      try {
+        const from = currentLanguageId;
+        const to = 'ar'; // ✅ ALWAYS Arabic
+
+        const data = await post<any>('/api/translate', {
+          text: currentText,
+          from,
+          to,
+        });
+
+        if (cancelled) return;
+
+        const d: any = data;
+        const translated: string | undefined =
+          d?.value ??
+          d?.data?.value ??
+          d?.translatedText ??
+          d?.translation ??
+          d?.text ??
+          d?.result ??
+          d?.output;
+
+        setAutoTranslation(translated || null);
+        setAutoTransLoading(false);
+      } catch (error) {
+        if (cancelled) return;
+
+        console.error('auto translate error:', error);
+
+        let msg = isAr
+          ? 'تعذر جلب ترجمة تلقائية من الخادم.'
+          : 'Could not fetch automatic translation from server.';
+
+        if (error instanceof ApiError) {
+          msg = error.message || msg;
+        }
+
+        setAutoTranslation(null);
+        setAutoTransError(msg);
+        setAutoTransLoading(false);
+      }
+    }, 500);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [text, currentLanguageId, isAr]);
+
   const recentWords = useMemo(
     () =>
       words
         .filter((w: Word) => w.languageId === currentLanguageId)
         .sort(
           (a, b) =>
-            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+            new Date(b.createdAt).getTime() -
+            new Date(a.createdAt).getTime(),
         )
         .slice(0, 12),
-    [words, currentLanguageId]
+    [words, currentLanguageId],
   );
 
-  // "ترجمة" مبدئية للكلمة الحالية (قبل ربط API حقيقي)
   const matchingWord = useMemo(() => {
     const trimmed = text.trim().toLowerCase();
     if (!trimmed) return null;
@@ -131,7 +316,7 @@ export default function TrainingView() {
       words.find(
         w =>
           w.languageId === currentLanguageId &&
-          w.text.trim().toLowerCase() === trimmed
+          w.text.trim().toLowerCase() === trimmed,
       ) || null
     );
   }, [text, words, currentLanguageId]);
@@ -156,13 +341,21 @@ export default function TrainingView() {
     }
   }
 
-  // Fallback: صوت المتصفح
   function speakWithBrowserTts(trimmed: string) {
+    if (!currentLang) {
+      setStatus(
+        isAr
+          ? 'لا توجد لغة محددة للنطق. اختر لغة من الإعدادات.'
+          : 'No language selected for speech. Please choose a language in settings.',
+      );
+      return;
+    }
+
     if (!ttsSupported || typeof window === 'undefined') {
       setStatus(
         isAr
-          ? 'النطق غير مدعوم في هذا المتصفح، ولم ينجح الاتصال بـ TTS الخارجي.'
-          : 'Speech synthesis is not supported and external TTS failed.'
+          ? 'النطق غير مدعوم في هذا المتصفح.'
+          : 'Speech synthesis is not supported in this browser.',
       );
       return;
     }
@@ -177,11 +370,7 @@ export default function TrainingView() {
 
     let voiceToUse: SpeechSynthesisVoice | null = null;
     const idx = Number(selectedVoiceIndex);
-    if (
-      availableVoices.length &&
-      !Number.isNaN(idx) &&
-      availableVoices[idx]
-    ) {
+    if (availableVoices.length && !Number.isNaN(idx) && availableVoices[idx]) {
       voiceToUse = availableVoices[idx];
     }
 
@@ -193,8 +382,8 @@ export default function TrainingView() {
       if (count >= total) {
         setStatus(
           isAr
-            ? `تم تكرار الكلمة ${total} مرة (باستخدام صوت المتصفح).`
-            : `Finished repeating the word ${total} times (browser voice).`
+            ? `تم تكرار الكلمة ${total} مرة (صوت المتصفح).`
+            : `Finished repeating ${total} times (browser voice).`,
         );
         speakingRef.current = false;
         setSpeaking(false);
@@ -204,25 +393,20 @@ export default function TrainingView() {
       setStatus(
         isAr
           ? `بنكرر الكلمة (صوت المتصفح)... ${count} من ${total}`
-          : `Repeating with browser voice... ${count} of ${total}`
+          : `Repeating with browser voice... ${count} of ${total}`,
       );
 
       const utter = new SpeechSynthesisUtterance(trimmed);
-
       if (voiceToUse) {
         utter.voice = voiceToUse;
         utter.lang = voiceToUse.lang || currentLang.ttsCode;
       } else {
         utter.lang = currentLang.ttsCode;
       }
-
       utter.rate = rate;
 
       utter.onend = () => {
-        if (!speakingRef.current) {
-          setStatus(isAr ? 'تم الإيقاف.' : 'Stopped.');
-          return;
-        }
+        if (!speakingRef.current) return;
         count += 1;
         setTimeout(speakOnce, 600);
       };
@@ -233,35 +417,40 @@ export default function TrainingView() {
     speakOnce();
   }
 
-  // نطق باستخدام ElevenLabs عبر /api/tts
+  // ✅ Backend TTS first
   async function speakWithExternalTts(trimmed: string): Promise<boolean> {
+    if (!currentLang) return false;
+
     try {
-      console.log('calling /api/tts with text:', trimmed);
+      const token = getAccessTokenFromSession();
+      if (!token) return false;
+
       speakingRef.current = true;
       setSpeaking(true);
       setStatus(
         isAr
-          ? 'جاري طلب الصوت من خدمة النطق الخارجية...'
-          : 'Requesting audio from external TTS service...'
+          ? 'جاري طلب الصوت من الخادم...'
+          : 'Requesting audio from backend...',
       );
 
-      const res = await fetch('/api/tts', {
+      const res = await fetch(`${API_BASE_URL}/api/translate/speak`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           text: trimmed,
-          lang: currentLang.ttsCode,
+          languageCode: currentLang.ttsCode,
+          repeat,
+          rate,
         }),
+        cache: 'no-store',
       });
 
-      console.log('response /api/tts status:', res.status);
-
       if (!res.ok) {
-        setStatus(
-          isAr
-            ? 'فشل في الاتصال بخدمة النطق الخارجية، سيتم استخدام صوت المتصفح.'
-            : 'External TTS request failed, falling back to browser voice.'
-        );
+        speakingRef.current = false;
+        setSpeaking(false);
         return false;
       }
 
@@ -276,7 +465,6 @@ export default function TrainingView() {
 
       const playOnce = () => {
         if (!speakingRef.current || !audioRef.current) {
-          setStatus(isAr ? 'تم الإيقاف.' : 'Stopped.');
           URL.revokeObjectURL(url);
           audioRef.current = null;
           return;
@@ -285,8 +473,8 @@ export default function TrainingView() {
         if (count >= total) {
           setStatus(
             isAr
-              ? `تم تكرار الكلمة ${total} مرة (باستخدام TTS الخارجي).`
-              : `Finished repeating the word ${total} times (external TTS).`
+              ? `تم التكرار ${total} مرة (TTS من الخادم).`
+              : `Finished ${total} times (backend TTS).`,
           );
           speakingRef.current = false;
           setSpeaking(false);
@@ -297,47 +485,30 @@ export default function TrainingView() {
 
         setStatus(
           isAr
-            ? `بنكرر الكلمة (خدمة خارجية)... ${count} من ${total}`
-            : `Repeating with external TTS... ${count} of ${total}`
+            ? `بنكرر الكلمة (الخادم)... ${count} من ${total}`
+            : `Repeating with backend... ${count} of ${total}`,
         );
 
         audioRef.current!.currentTime = 0;
-        audioRef.current!
-          .play()
-          .catch(err => {
-            console.error('audio play error:', err);
-            setStatus(
-              isAr
-                ? 'تعذر تشغيل الصوت من الخدمة الخارجية.'
-                : 'Could not play audio from external service.'
-            );
-            speakingRef.current = false;
-            setSpeaking(false);
-            URL.revokeObjectURL(url);
-            audioRef.current = null;
-          });
+        audioRef.current!.play().catch(() => {
+          speakingRef.current = false;
+          setSpeaking(false);
+          URL.revokeObjectURL(url);
+          audioRef.current = null;
+        });
       };
 
       audio.onended = () => {
-        if (!speakingRef.current) {
-          URL.revokeObjectURL(url);
-          audioRef.current = null;
-          return;
-        }
+        if (!speakingRef.current) return;
         count += 1;
         setTimeout(playOnce, 400);
       };
 
       playOnce();
-
       return true;
-    } catch (err) {
-      console.error('External TTS error:', err);
-      setStatus(
-        isAr
-          ? 'حدث خطأ أثناء الاتصال بخدمة النطق الخارجية، سيتم استخدام صوت المتصفح.'
-          : 'Error while calling external TTS; falling back to browser voice.'
-      );
+    } catch {
+      speakingRef.current = false;
+      setSpeaking(false);
       return false;
     }
   }
@@ -349,79 +520,57 @@ export default function TrainingView() {
       return;
     }
 
+    if (!currentLang) {
+      setStatus(
+        isAr
+          ? 'اختر لغة من الإعدادات.'
+          : 'Please select a language in settings.',
+      );
+      return;
+    }
+
     const exists = words.some(
       w =>
         w.languageId === currentLanguageId &&
-        w.text.trim().toLowerCase() === trimmed.toLowerCase()
+        w.text.trim().toLowerCase() === trimmed.toLowerCase(),
     );
 
-    if (exists) {
-      Swal.fire({
-        icon: 'info',
-        title: isAr ? 'الكلمة موجودة بالفعل' : 'Word already exists',
-        text: isAr
-          ? 'هذه الكلمة مكتوبة قبل كده في نفس اللغة. هنستخدمها للتدريب فقط.'
-          : 'This word is already saved in this language. It will be used only for training.',
-        confirmButtonText: isAr ? 'تمام' : 'OK',
-        background: '#020617',
-        color: '#e5e7eb',
-        confirmButtonColor: '#38bdf8',
-      });
-    } else {
-      addOrUpdateWord({ text: trimmed });
-    }
+    if (!exists) addOrUpdateWord({ text: trimmed });
 
-    // نحاول الأول TTS الخارجي
-    console.log('speak() clicked, using external TTS');
     const ok = await speakWithExternalTts(trimmed);
-
-    // لو فشل → fallback للمتصفح
-    if (!ok) {
-      console.log('external TTS failed, fallback to browser TTS');
-      speakWithBrowserTts(trimmed);
-    }
+    if (!ok) speakWithBrowserTts(trimmed);
   }
 
-  // تسجيل صوت المستخدم
   async function startRecording() {
     if (!recordingSupported || isRecording) return;
 
     const trimmed = text.trim();
     if (!trimmed) {
-      setStatus(
-        isAr
-          ? 'اكتب كلمة أولاً قبل بدء التسجيل.'
-          : 'Type a word first before recording.'
-      );
+      setStatus(isAr ? 'اكتب كلمة أولاً.' : 'Type a word first.');
       return;
     }
 
     try {
-      // تنبيه عند بداية التسجيل
       await Swal.fire({
-        background: '#020617',
-        color: '#e2e8f0',
+        background: isDark ? '#020617' : '#ffffff',
+        color: isDark ? '#e2e8f0' : '#020617',
         icon: 'info',
         title: isAr ? 'بدء تسجيل صوتك' : 'Starting recording',
         text: isAr
-          ? `أنت الآن ستقوم بتسجيل صوتك لهذه الكلمة: "${trimmed}". تكلم بوضوح بالقرب من الميكروفون، ثم اضغط على "إيقاف التسجيل" عند الانتهاء.`
-          : `You are now going to record your voice for this word: "${trimmed}". Speak clearly near the microphone, then press "Stop recording" when you are done.`,
+          ? `هتسجلي صوتك لكلمة: "${trimmed}".`
+          : `You are recording your pronunciation for: "${trimmed}".`,
         confirmButtonText: isAr ? 'ابدأ التسجيل' : 'Start recording',
         confirmButtonColor: '#0ea5e9',
       });
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-      });
-
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream);
+
       chunksRef.current = [];
       mediaRecorderRef.current = recorder;
 
       recorder.ondataavailable = e => {
-        if (e.data && e.data.size > 0) {
-          chunksRef.current.push(e.data);
-        }
+        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
       };
 
       recorder.onstop = async () => {
@@ -434,39 +583,46 @@ export default function TrainingView() {
           stream.getTracks().forEach(t => t.stop());
 
           const currentText = text.trim();
-          if (currentText) {
-            saveRecordingForWord(currentText, dataUrl);
-            setStatus(
-              isAr
-                ? 'تم حفظ تسجيلك مع هذه الكلمة.'
-                : 'Your recording has been saved with this word.'
-            );
-          } else {
-            setStatus(
-              isAr
-                ? 'تم حفظ التسجيل فقط بدون ربطه بكلمة.'
-                : 'Recording saved only locally without linking to a word.'
-            );
+          if (!currentText) return;
+
+          const base64 = dataUrl.split(',')[1] || '';
+          if (!base64) return;
+
+          saveRecordingForWord(currentText, dataUrl);
+
+          if (isGuest) {
+            setStatus(isAr ? 'تم حفظ التسجيل محلياً.' : 'Saved locally.');
+            return;
           }
-        } catch {
-          setStatus(
-            isAr
-              ? 'حدث خطأ أثناء معالجة التسجيل.'
-              : 'An error occurred while processing the recording.'
+
+          const wordId = await ensureWordIdInBackend(
+            currentLanguageId,
+            currentText,
           );
+          if (!wordId) return;
+
+          await post('/api/words/recording/save', {
+            wordId,
+            base64Audio: base64,
+            fileExt: 'webm',
+          });
+
+          setStatus(
+            isAr ? 'تم حفظ التسجيل محلياً وعلى الخادم.' : 'Saved locally and on server.',
+          );
+        } catch {
+          setStatus(isAr ? 'خطأ في التسجيل.' : 'Recording error.');
         }
       };
 
       recorder.start();
       setIsRecording(true);
-      setStatus(
-        isAr ? 'جاري تسجيل صوتك...' : 'Recording your pronunciation...'
-      );
-    } catch (err) {
+      setStatus(isAr ? 'جاري التسجيل...' : 'Recording...');
+    } catch {
       setStatus(
         isAr
-          ? 'تعذر الوصول إلى الميكروفون. تأكد من صلاحيات المتصفح.'
-          : 'Could not access microphone. Please check browser permissions.'
+          ? 'تعذر الوصول للميكروفون.'
+          : 'Could not access microphone.',
       );
     }
   }
@@ -477,16 +633,28 @@ export default function TrainingView() {
     setIsRecording(false);
   }
 
+  if (!currentLang) {
+    return (
+      <section className="space-y-3">
+        <p className="text-sm text-slate-200">
+          {isAr
+            ? 'اختر لغة من الإعدادات قبل التدريب.'
+            : 'Please select a language in settings before training.'}
+        </p>
+      </section>
+    );
+  }
+
   return (
     <section className="space-y-5">
-      {/* صف علوي: كلمة + إعدادات */}
       <div className="grid gap-4 md:grid-cols-[minmax(0,2fr)_minmax(0,1.6fr)]">
-        {/* كلمة الإدخال + ترجمة تجريبية */}
+        {/* ===== Left Panel (word + translation) ===== */}
         <div className="panel panel-muted space-y-3 rounded-2xl border border-slate-800 px-3.5 py-3">
           <div className="space-y-1">
             <label className="text-xs font-medium text-slate-200">
               {isAr ? 'الكلمة التي تريد حفظها' : 'Word you want to learn'}
             </label>
+
             <div className="relative">
               <input
                 type="text"
@@ -495,6 +663,7 @@ export default function TrainingView() {
                 placeholder={isAr ? 'مثال: apple' : 'e.g. apple'}
                 className="w-full rounded-2xl border border-slate-700 bg-slate-900/60 px-3 py-2.5 pr-9 text-sm text-slate-50 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/80 focus:border-sky-400/80 shadow-sm"
               />
+
               {text && (
                 <button
                   type="button"
@@ -506,24 +675,25 @@ export default function TrainingView() {
                 </button>
               )}
             </div>
+
             <p className="text-[11px] text-slate-400">
               {isAr
-                ? 'الكلمة هتتحفظ تلقائيًا تحت اللغة الحالية وتظهر في صفحة قائمة الكلمات.'
-                : 'The word will be saved under the current language and shown in the words list.'}
+                ? 'الكلمة هتتحفظ تحت اللغة الحالية.'
+                : 'The word is saved under the current language.'}
             </p>
           </div>
 
-          {/* ترجمة مبدئية للكلمة (قبل API حقيقي) */}
           <div className="space-y-1 mt-2">
             <p className="text-[11px] font-medium text-slate-300">
-              {isAr ? 'ترجمة الكلمة (تجريبية):' : 'Word translation (preview):'}
+              {isAr ? 'ترجمة الكلمة:' : 'Word translation:'}
             </p>
+
             <div className="min-h-[40px] rounded-2xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-[12px] text-slate-100 flex items-center">
               {!text.trim() ? (
                 <span className="text-slate-500 text-[11px]">
                   {isAr
-                    ? 'اكتب كلمة، وستظهر ترجمتها هنا لاحقًا عند توصيل خدمة الترجمة.'
-                    : 'Type a word and its translation will appear here once the translation service is connected.'}
+                    ? 'اكتب كلمة لترى ترجمتها.'
+                    : 'Type a word to see its translation.'}
                 </span>
               ) : matchingWord && matchingWord.translation ? (
                 <span>
@@ -532,18 +702,35 @@ export default function TrainingView() {
                     {matchingWord.translation}
                   </span>
                 </span>
+              ) : autoTransLoading ? (
+                <span className="text-slate-400 text-[11px]">
+                  {isAr
+                    ? 'جاري جلب ترجمة...'
+                    : 'Fetching translation...'}
+                </span>
+              ) : autoTranslation ? (
+                <span>
+                  {isAr ? 'ترجمة مقترحة: ' : 'Suggested translation: '}
+                  <span className="font-semibold text-emerald-200">
+                    {autoTranslation}
+                  </span>
+                </span>
+              ) : autoTransError ? (
+                <span className="text-rose-300 text-[11px]">
+                  {autoTransError}
+                </span>
               ) : (
                 <span className="text-slate-500 text-[11px]">
                   {isAr
-                    ? 'لا توجد ترجمة محفوظة لهذه الكلمة حتى الآن. سيتم جلب ترجمة تلقائية هنا عند إضافة الـ API.'
-                    : 'No saved translation for this word yet. An automatic translation will appear here once the API is integrated.'}
+                    ? 'لا توجد ترجمة.'
+                    : 'No translation.'}
                 </span>
               )}
             </div>
           </div>
         </div>
 
-        {/* إعدادات النطق + اختيار الصوت + التسجيل */}
+        {/* ===== Right Panel (voice) ===== */}
         <div className="panel rounded-2xl border border-slate-800 px-3.5 py-3 space-y-3">
           <div className="flex items-center justify-between gap-2">
             <div className="space-y-0.5">
@@ -559,13 +746,13 @@ export default function TrainingView() {
             </span>
           </div>
 
-          {/* اختيار الصوت (fallback) */}
           <div className="space-y-1">
             <label className="text-[11px] text-slate-300">
               {isAr
-                ? 'اختر صوت المتصفح (يُستخدم لو فشل TTS الخارجي)'
-                : 'Choose browser voice (used if external TTS fails)'}
+                ? 'اختر صوت المتصفح (Fallback)'
+                : 'Choose browser voice (fallback)'}
             </label>
+
             <select
               value={selectedVoiceIndex}
               onChange={e => setSelectedVoiceIndex(e.target.value)}
@@ -575,14 +762,14 @@ export default function TrainingView() {
               {!ttsSupported ? (
                 <option value="">
                   {isAr
-                    ? 'النطق بالمتصفح غير مدعوم.'
-                    : 'Browser speech is not supported.'}
+                    ? 'الميزة غير مدعومة.'
+                    : 'Speech not supported.'}
                 </option>
               ) : availableVoices.length === 0 ? (
                 <option value="">
                   {isAr
-                    ? 'الأصوات غير متاحة حاليًا. جرّب إعادة تحميل الصفحة.'
-                    : 'Voices are not available yet. Try reloading the page.'}
+                    ? 'جاري تحميل الأصوات...'
+                    : 'Loading voices...'}
                 </option>
               ) : (
                 availableVoices.map((v, index) => (
@@ -595,17 +782,14 @@ export default function TrainingView() {
                 ))
               )}
             </select>
+
             {voiceWarning && (
-              <p className="text-[10px] text-amber-400 mt-1">{voiceWarning}</p>
+              <p className="text-[10px] text-amber-400 mt-1">
+                {voiceWarning}
+              </p>
             )}
-            <p className="text-[10px] text-slate-500">
-              {isAr
-                ? 'يتم استخدام خدمة TTS خارجية أولاً، وهذا الصوت يستخدم فقط عند فشلها.'
-                : 'External TTS is used first; this browser voice is used only as a fallback.'}
-            </p>
           </div>
 
-          {/* تكرار وسرعة */}
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <label className="text-[11px] text-slate-300">
@@ -629,10 +813,12 @@ export default function TrainingView() {
                 ))}
               </select>
             </div>
+
             <div className="space-y-1">
               <label className="text-[11px] text-slate-300">
                 {isAr ? 'سرعة النطق' : 'Speech speed'}
               </label>
+
               <div className="space-y-1">
                 <input
                   type="range"
@@ -651,7 +837,6 @@ export default function TrainingView() {
             </div>
           </div>
 
-          {/* أزرار النطق */}
           <div className="grid grid-cols-2 gap-2 pt-1">
             <button
               type="button"
@@ -661,6 +846,7 @@ export default function TrainingView() {
             >
               {isAr ? 'ابدأ التكرار' : 'Start repeating'}
             </button>
+
             <button
               type="button"
               onClick={stopSpeech}
@@ -670,21 +856,22 @@ export default function TrainingView() {
             </button>
           </div>
 
-          {/* قسم تسجيل صوت المستخدم */}
+          {/* Recording */}
           <div className="mt-3 space-y-1 rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-2.5">
             <div className="flex items-center gap-2 mb-1">
               <Activity className="text-emerald-400" size={16} />
               <p className="text-[11px] font-medium text-slate-200">
                 {isAr
-                  ? 'جرّب تنطق الكلمة بنفسك (يتم حفظ التسجيل مع الكلمة)'
-                  : 'Try pronouncing the word yourself (recording is saved with the word).'}
+                  ? 'جرّب تنطق الكلمة بنفسك'
+                  : 'Try pronouncing yourself'}
               </p>
             </div>
+
             {!recordingSupported ? (
               <p className="text-[10px] text-slate-500">
                 {isAr
-                  ? 'المتصفح الحالي لا يدعم تسجيل الصوت أو تم منع الوصول إلى الميكروفون.'
-                  : 'Current browser does not support audio recording or microphone access is blocked.'}
+                  ? 'المتصفح لا يدعم التسجيل.'
+                  : 'Recording not supported.'}
               </p>
             ) : (
               <>
@@ -698,6 +885,7 @@ export default function TrainingView() {
                     <Mic size={14} />
                     {isAr ? 'ابدأ التسجيل' : 'Start recording'}
                   </button>
+
                   <button
                     type="button"
                     onClick={stopRecordingHandler}
@@ -708,17 +896,13 @@ export default function TrainingView() {
                     {isAr ? 'إيقاف التسجيل' : 'Stop recording'}
                   </button>
                 </div>
-                <p className="text-[10px] text-slate-500 mt-1">
-                  {isAr
-                    ? 'سجّل ٣–٥ ثواني لنطقك للكلمة. عند إيقاف التسجيل، يتم حفظه مع الكلمة الحالية في هذه اللغة.'
-                    : 'Record 3–5 seconds of your pronunciation. When you stop, it will be saved with the current word in this language.'}
-                </p>
+
                 {recordedUrl && (
                   <div className="mt-2 space-y-1">
                     <p className="text-[10px] text-slate-400">
                       {isAr
-                        ? 'تسجيلك الأخير لهذه الكلمة:'
-                        : 'Your latest recording for this word:'}
+                        ? 'تسجيلك الأخير:'
+                        : 'Your latest recording:'}
                     </p>
                     <audio controls src={recordedUrl} className="w-full" />
                   </div>
@@ -729,29 +913,21 @@ export default function TrainingView() {
         </div>
       </div>
 
-      {/* حالة النطق / التسجيل */}
       <p className="text-[11px] text-slate-300 min-h-[18px]">{status}</p>
 
-      {/* آخر الكلمات */}
+      {/* Recent words */}
       <div className="panel panel-muted mt-2 rounded-2xl border border-slate-800 px-3.5 py-3 space-y-2">
         <div className="flex items-center justify-between">
           <h2 className="text-xs font-semibold text-slate-100">
-            {isAr
-              ? 'آخر الكلمات المستخدمة في هذه اللغة'
-              : 'Recent words in this language'}
+            {isAr ? 'آخر الكلمات' : 'Recent words'}
           </h2>
-          <p className="text-[10px] text-slate-500">
-            {isAr
-              ? 'اضغط على أي كلمة لإرجاعها في خانة الإدخال، ثم اسمع النطق أو سجّل صوتك من جديد.'
-              : 'Click any word to put it back into the input, then listen or record again.'}
-          </p>
         </div>
 
         {recentWords.length === 0 ? (
           <p className="text-[11px] text-slate-500">
             {isAr
-              ? 'لم يتم استخدام أي كلمة بعد لهذه اللغة.'
-              : 'No words used yet for this language.'}
+              ? 'لا توجد كلمات بعد.'
+              : 'No words yet.'}
           </p>
         ) : (
           <div className="flex flex-wrap gap-1.5">

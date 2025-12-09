@@ -1,4 +1,3 @@
-// components/views/WordsView.tsx
 'use client';
 
 import { useState, useMemo, useEffect } from 'react';
@@ -16,7 +15,8 @@ import {
 import { LANGUAGES } from '@/lib/constants';
 import { useAppState } from '@/context/AppStateContext';
 import { useUiSettings } from '@/context/UiSettingsContext';
-import { Word } from '@/lib/types';
+import { useAuth } from '@/context/AuthContext';
+import type { Word } from '@/lib/types';
 import RecordingActions from '@/components/RecordingActions';
 
 const cardVariants = {
@@ -25,20 +25,39 @@ const cardVariants = {
 };
 
 const PAGE_SIZE = 30;
-
 type ViewMode = 'cards' | 'compact';
+
+const swalDarkBase = {
+  background: '#020617',
+  color: '#e5e7eb',
+  confirmButtonColor: '#38bdf8',
+  cancelButtonColor: '#64748b',
+};
+
+const swalLightBase = {
+  background: '#ffffff',
+  color: '#020617',
+  confirmButtonColor: '#0ea5e9',
+  cancelButtonColor: '#64748b',
+};
 
 export default function WordsView() {
   const {
     words,
     currentLanguageId,
+    initialized,
     addOrUpdateWord,
     deleteWord,
     deleteWordsForCurrentLanguage,
     updateWordRecording,
   } = useAppState();
-  const { uiLang } = useUiSettings();
+
+  const { uiLang, theme } = useUiSettings();
+  const { user } = useAuth();
+
   const isAr = uiLang === 'ar';
+  const isDark = theme === 'dark';
+  const swalBase = isDark ? swalDarkBase : swalLightBase;
 
   const [newText, setNewText] = useState('');
   const [newTranslation, setNewTranslation] = useState('');
@@ -49,11 +68,16 @@ export default function WordsView() {
   const [viewMode, setViewMode] = useState<ViewMode>('cards');
   const [page, setPage] = useState(1);
 
-  const lang = LANGUAGES.find(l => l.id === currentLanguageId)!;
+  // اللغة الحالية من القائمة، بطريقة آمنة
+  const lang = useMemo(
+    () => LANGUAGES.find(l => l.id === currentLanguageId) ?? null,
+    [currentLanguageId],
+  );
 
+  // كلمات هذه اللغة من الـ context (سواء backend أو local حسب AppStateContext)
   const wordsForLang = useMemo(
     () => words.filter(w => w.languageId === currentLanguageId),
-    [words, currentLanguageId]
+    [words, currentLanguageId],
   );
 
   const filtered = useMemo(
@@ -75,7 +99,7 @@ export default function WordsView() {
 
         return true;
       }),
-    [wordsForLang, search, topicFilter]
+    [wordsForLang, search, topicFilter],
   );
 
   useEffect(() => {
@@ -90,11 +114,12 @@ export default function WordsView() {
 
     const trimmed = newText.trim();
     const exists = wordsForLang.some(
-      w => w.text.trim().toLowerCase() === trimmed.toLowerCase()
+      w => w.text.trim().toLowerCase() === trimmed.toLowerCase(),
     );
 
     if (exists) {
       const result = await Swal.fire({
+        ...swalBase,
         icon: 'warning',
         title: isAr ? 'الكلمة مكتوبة قبل كده' : 'Word already exists',
         text: isAr
@@ -103,42 +128,61 @@ export default function WordsView() {
         showCancelButton: true,
         confirmButtonText: isAr ? 'نعم، حدّثها' : 'Yes, update',
         cancelButtonText: isAr ? 'إلغاء' : 'Cancel',
-        background: '#020617',
-        color: '#e5e7eb',
-        confirmButtonColor: '#38bdf8',
-        cancelButtonColor: '#64748b',
       });
 
       if (!result.isConfirmed) return;
     }
 
-    addOrUpdateWord({
-      text: newText,
-      translation: newTranslation,
-      example: newExample,
-      topic: newTopic,
-    });
+    const trimmedTranslation = newTranslation.trim();
+    const trimmedExample = newExample.trim();
+    const trimmedTopic = newTopic.trim();
 
-    setNewText('');
-    setNewTranslation('');
-    setNewExample('');
-    setNewTopic('');
+    try {
+      await addOrUpdateWord({
+        text: trimmed,
+        translation: trimmedTranslation,
+        example: trimmedExample,
+        topic: trimmedTopic,
+      });
 
-    await Swal.fire({
-      icon: 'success',
-      title: isAr ? 'تم الحفظ' : 'Saved',
-      text: isAr ? 'تم حفظ الكلمة بنجاح.' : 'Word saved successfully.',
-      timer: 1200,
-      showConfirmButton: false,
-      background: '#020617',
-      color: '#e5e7eb',
-    });
+      setNewText('');
+      setNewTranslation('');
+      setNewExample('');
+      setNewTopic('');
+
+      await Swal.fire({
+        ...swalBase,
+        icon: 'success',
+        title: isAr ? 'تم الحفظ' : 'Saved',
+        text: isAr
+          ? 'تم حفظ الكلمة بنجاح.'
+          : 'Word saved successfully.',
+        timer: 1200,
+        showConfirmButton: false,
+      });
+    } catch (error) {
+      console.error('handleSave error:', error);
+      await Swal.fire({
+        ...swalBase,
+        icon: 'error',
+        title: isAr ? 'لم يتم حفظ الكلمة' : 'Could not save word',
+        text: isAr
+          ? 'حدث خطأ أثناء حفظ الكلمة. حاول مرة أخرى.'
+          : 'An error occurred while saving the word. Please try again.',
+      });
+    }
   }
 
   function speakWord(word: Word) {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    if (typeof window === 'undefined' || !('speechSynthesis' in window))
+      return;
+
     const synth = window.speechSynthesis;
-    const l = LANGUAGES.find(l => l.id === word.languageId) ?? lang;
+    const l =
+      LANGUAGES.find(l => l.id === word.languageId) ?? lang;
+
+    if (!l) return;
+
     const utter = new SpeechSynthesisUtterance(word.text);
     utter.lang = l.ttsCode;
     synth.speak(utter);
@@ -146,6 +190,7 @@ export default function WordsView() {
 
   async function confirmDeleteWord(word: Word) {
     const result = await Swal.fire({
+      ...swalBase,
       icon: 'warning',
       title: isAr ? 'حذف الكلمة' : 'Delete word',
       text: isAr
@@ -154,22 +199,31 @@ export default function WordsView() {
       showCancelButton: true,
       confirmButtonText: isAr ? 'نعم، احذف' : 'Yes, delete',
       cancelButtonText: isAr ? 'إلغاء' : 'Cancel',
-      background: '#020617',
-      color: '#e5e7eb',
       confirmButtonColor: '#ef4444',
-      cancelButtonColor: '#64748b',
     });
 
-    if (result.isConfirmed) {
-      deleteWord(word.id);
+    if (!result.isConfirmed) return;
+
+    try {
+      await deleteWord(word.id);
+
       await Swal.fire({
+        ...swalBase,
         icon: 'success',
         title: isAr ? 'تم الحذف' : 'Deleted',
         text: isAr ? 'تم حذف الكلمة.' : 'Word deleted.',
         timer: 1000,
         showConfirmButton: false,
-        background: '#020617',
-        color: '#e5e7eb',
+      });
+    } catch (error) {
+      console.error('confirmDeleteWord error:', error);
+      await Swal.fire({
+        ...swalBase,
+        icon: 'error',
+        title: isAr ? 'لم يتم الحذف' : 'Could not delete',
+        text: isAr
+          ? 'حدث خطأ أثناء حذف الكلمة.'
+          : 'An error occurred while deleting the word.',
       });
     }
   }
@@ -178,23 +232,27 @@ export default function WordsView() {
     if (wordsForLang.length === 0) return;
 
     const result = await Swal.fire({
+      ...swalBase,
       icon: 'warning',
-      title: isAr ? 'مسح كل كلمات هذه اللغة' : 'Delete all words',
+      title: isAr
+        ? 'مسح كل كلمات هذه اللغة'
+        : 'Delete all words',
       text: isAr
         ? `هتمسح كل (${wordsForLang.length}) كلمة الخاصة باللغة الحالية. متأكد؟`
         : `This will delete all (${wordsForLang.length}) words for the current language. Are you sure?`,
       showCancelButton: true,
       confirmButtonText: isAr ? 'نعم، امسح الكل' : 'Yes, delete all',
       cancelButtonText: isAr ? 'إلغاء' : 'Cancel',
-      background: '#020617',
-      color: '#e5e7eb',
       confirmButtonColor: '#ef4444',
-      cancelButtonColor: '#64748b',
     });
 
-    if (result.isConfirmed) {
-      deleteWordsForCurrentLanguage();
+    if (!result.isConfirmed) return;
+
+    try {
+      await deleteWordsForCurrentLanguage();
+
       await Swal.fire({
+        ...swalBase,
         icon: 'success',
         title: isAr ? 'تم المسح' : 'Deleted',
         text: isAr
@@ -202,10 +260,31 @@ export default function WordsView() {
           : 'All words for this language have been deleted.',
         timer: 1200,
         showConfirmButton: false,
-        background: '#020617',
-        color: '#e5e7eb',
+      });
+    } catch (error) {
+      console.error('confirmDeleteAll error:', error);
+      await Swal.fire({
+        ...swalBase,
+        icon: 'error',
+        title: isAr ? 'لم يتم المسح' : 'Could not delete all',
+        text: isAr
+          ? 'حدث خطأ أثناء مسح الكلمات.'
+          : 'An error occurred while deleting the words.',
       });
     }
+  }
+
+  // لو لم يتم تحديد لغة أو لم تُوجد في القائمة
+  if (!lang) {
+    return (
+      <section className="space-y-3">
+        <p className="text-sm text-slate-200">
+          {isAr
+            ? 'من فضلك اختر لغة من الإعدادات قبل إدارة الكلمات.'
+            : 'Please select a language in settings before managing words.'}
+        </p>
+      </section>
+    );
   }
 
   return (
@@ -285,7 +364,9 @@ export default function WordsView() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div className="space-y-1">
               <label className="text-[11px] text-slate-300">
-                {isAr ? 'التصنيف / المجموعة (اختياري)' : 'Topic / group (optional)'}
+                {isAr
+                  ? 'التصنيف / المجموعة (اختياري)'
+                  : 'Topic / group (optional)'}
               </label>
               <div className="flex items-center gap-2">
                 <Tag size={14} className="text-slate-500" />
@@ -294,7 +375,9 @@ export default function WordsView() {
                   onChange={e => setNewTopic(e.target.value)}
                   type="text"
                   placeholder={
-                    isAr ? 'مثال: food, travel, A1...' : 'e.g. food, travel, A1...'
+                    isAr
+                      ? 'مثال: food, travel, A1...'
+                      : 'e.g. food, travel, A1...'
                   }
                   className="w-full rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-1.5 text-xs text-slate-50 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/70 focus:border-sky-400/80"
                 />
@@ -390,7 +473,9 @@ export default function WordsView() {
                 onChange={e => setTopicFilter(e.target.value)}
                 type="text"
                 placeholder={
-                  isAr ? 'مثال: food, travel, A1...' : 'e.g. food, travel, A1...'
+                  isAr
+                    ? 'مثال: food, travel, A1...'
+                    : 'e.g. food, travel, A1...'
                 }
                 className="w-full rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-1.5 text-[11px] text-slate-50 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/70 focus:border-sky-400/80"
               />
@@ -414,8 +499,17 @@ export default function WordsView() {
         </motion.div>
       </div>
 
+      {/* حالة تحميل من الـ Backend عبر AppStateContext */}
+      {user && !initialized && (
+        <p className="text-[11px] text-slate-400">
+          {isAr
+            ? 'جاري تحميل الكلمات من الخادم...'
+            : 'Loading words from server...'}
+        </p>
+      )}
+
       {/* قائمة الكلمات */}
-      {filtered.length === 0 ? (
+      {initialized && filtered.length === 0 ? (
         <p className="text-[11px] text-slate-400">
           {isAr
             ? 'لا توجد كلمات بعد لهذه اللغة بهذه الفلاتر. جرّب إزالة البحث أو التصنيف.'
@@ -466,11 +560,13 @@ export default function WordsView() {
                   </div>
                   <div className="flex flex-col items-end gap-1 text-[10px] text-slate-500">
                     <p>
-                      {isAr ? 'مراجعات: ' : 'Reviews: '} {w.reviewCount ?? 0}
+                      {isAr ? 'مراجعات: ' : 'Reviews: '}{' '}
+                      {w.reviewCount ?? 0}
                     </p>
                     <p>
-                      {isAr ? 'صحيحة: ' : 'Correct: '} {w.correctCount ?? 0}{' '}
-                      {isAr ? '/ خاطئة: ' : '/ wrong: '}
+                      {isAr ? 'صحيحة: ' : 'Correct: '}{' '}
+                      {w.correctCount ?? 0}{' '}
+                      {isAr ? '/ خاطئة: ' : '/ wrong: '}{' '}
                       {w.wrongCount ?? 0}
                     </p>
                   </div>
@@ -486,13 +582,16 @@ export default function WordsView() {
                       {isAr ? 'نطق' : 'Speak'}
                     </button>
 
-                    {w.recordingUrl && (
-                      <RecordingActions
-                        recordingUrl={w.recordingUrl}
-                        fileName={w.text}
-                        onDelete={() => updateWordRecording(w.id, null)}
-                      />
-                    )}
+                   {w.recordingUrl && (
+  <RecordingActions
+    recordingUrl={w.recordingUrl}
+    fileName={w.text}
+    wordId={user ? w.id : undefined}          // ✅ لو user موجود هيمسح من الباك
+    onDeleteLocal={() => updateWordRecording(w.id, null)} // ✅ يمسح محلي
+    onDelete={() => updateWordRecording(w.id, null)}      // ✅ احتياط لو الكمبوننت بيستخدم onDelete
+  />
+)}
+
                   </div>
                   <button
                     onClick={() => confirmDeleteWord(w)}
@@ -565,7 +664,9 @@ export default function WordsView() {
                       <td className="px-3 py-2 whitespace-nowrap">
                         {w.translation || (
                           <span className="text-slate-500">
-                            {isAr ? 'لا توجد ترجمة' : 'No translation'}
+                            {isAr
+                              ? 'لا توجد ترجمة'
+                              : 'No translation'}
                           </span>
                         )}
                       </td>
@@ -586,7 +687,8 @@ export default function WordsView() {
                             {w.reviewCount ?? 0}
                           </span>
                           <span>
-                            {isAr ? 'صح: ' : 'Correct: '} {w.correctCount ?? 0}{' '}
+                            {isAr ? 'صح: ' : 'Correct: '}{' '}
+                            {w.correctCount ?? 0}{' '}
                             {isAr ? '/ خطأ: ' : '/ wrong: '}{' '}
                             {w.wrongCount ?? 0}
                           </span>
@@ -602,13 +704,16 @@ export default function WordsView() {
                             {isAr ? 'نطق' : 'Speak'}
                           </button>
 
-                          {w.recordingUrl && (
-                            <RecordingActions
-                              recordingUrl={w.recordingUrl}
-                              fileName={w.text}
-                              onDelete={() => updateWordRecording(w.id, null)}
-                            />
-                          )}
+                         {w.recordingUrl && (
+  <RecordingActions
+    recordingUrl={w.recordingUrl}
+    fileName={w.text}
+    wordId={user ? w.id : undefined}          // ✅ مهم جداً
+    onDeleteLocal={() => updateWordRecording(w.id, null)} // ✅ يمسح محلي بعد نجاح الحذف
+    onDelete={() => updateWordRecording(w.id, null)}      // ✅ fallback
+  />
+)}
+
 
                           <button
                             onClick={() => confirmDeleteWord(w)}

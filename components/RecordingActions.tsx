@@ -1,158 +1,337 @@
 // components/RecordingActions.tsx
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import Swal from 'sweetalert2';
-import { Play, Pause, Download, Trash2 } from 'lucide-react';
+import { Volume2, Download, Trash2 } from 'lucide-react';
 import { useUiSettings } from '@/context/UiSettingsContext';
+import { useAuth } from '@/context/AuthContext';
+import { safeGetItem } from '@/lib/storage';
+import { apiRequest, ApiError } from '@/lib/api/httpClient';
 
-type RecordingActionsProps = {
-  recordingUrl: string;
-  fileName?: string;
-  onDelete: () => void;
+const STORAGE_KEY_SESSION = 'vocab_trainer_session_user';
+
+type StoredSession = {
+  user?: any;
+  accessToken?: string | null;
+  refreshToken?: string | null;
 };
+
+interface RecordingActionsProps {
+  recordingUrl?: string | null;     // URL محلي (Data URL أو blob URL)، لو موجود
+  fileName: string;                 // اسم الملف عند التحميل
+  wordId?: string;                  // مطلوب لمود الـ Backend
+  onDeleteLocal?: () => void;       // حذف محلي للضيف
+}
+
+function getAccessToken(): string | null {
+  const raw = safeGetItem(STORAGE_KEY_SESSION);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as StoredSession;
+    return (parsed as any).accessToken ?? null;
+  } catch {
+    return null;
+  }
+}
 
 export default function RecordingActions({
   recordingUrl,
   fileName,
-  onDelete,
+  wordId,
+  onDeleteLocal,
 }: RecordingActionsProps) {
-  const { uiLang } = useUiSettings();
+  const { uiLang, theme } = useUiSettings();
+  const { user } = useAuth();
+
   const isAr = uiLang === 'ar';
+  const isDark = theme === 'dark';
+  const isGuest = !user || !wordId;
 
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [hasShownPlayInfo, setHasShownPlayInfo] = useState(false);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [localUrl, setLocalUrl] = useState<string | null>(
+    recordingUrl ?? null
+  );
+  const [loading, setLoading] = useState(false);
 
-  const baseName =
-    fileName && fileName.trim().length > 0 ? fileName.trim() : 'recording';
-  const safeFileName = baseName.replace(/\s+/g, '_');
-  const downloadFileName = `${safeFileName}.webm`;
+  const swalBase = isDark
+    ? {
+        background: '#020617',
+        color: '#e5e7eb',
+        confirmButtonColor: '#38bdf8',
+        cancelButtonColor: '#64748b',
+      }
+    : {
+        background: '#ffffff',
+        color: '#020617',
+        confirmButtonColor: '#0ea5e9',
+        cancelButtonColor: '#64748b',
+      };
 
-  function ensureAudio() {
-    if (!audioRef.current) {
-      const audio = new Audio(recordingUrl);
-      audio.onended = () => setIsPlaying(false);
-      audioRef.current = audio;
-    }
-    return audioRef.current;
+  if (!localUrl && isGuest && !wordId) {
+    // لا يوجد تسجيل فعلي لعرضه
+    return null;
   }
 
-  async function handleTogglePlay() {
-    try {
-      const audio = ensureAudio();
-      if (!audio) return;
+  async function ensureUrlFromBackend(): Promise<string | null> {
+    if (localUrl) return localUrl;
+    if (!wordId) return null;
 
-      // أول مرة تشغيل → نعرض تنبيه بسيط
-      if (!isPlaying && !hasShownPlayInfo) {
-        await Swal.fire({
-          background: '#020617',
-          color: '#e2e8f0',
-          icon: 'info',
-          title: isAr
-            ? 'تشغيل تسجيلك لهذه الكلمة'
-            : 'Playing your recording',
+    const token = getAccessToken();
+    if (!token) {
+      await Swal.fire({
+        ...swalBase,
+        icon: 'error',
+        title: isAr ? 'خطأ في الجلسة' : 'Session error',
+        text: isAr
+          ? 'لا يوجد رمز دخول صالح. حاول تسجيل الدخول مرة أخرى.'
+          : 'No valid access token. Please sign in again.',
+      });
+      return null;
+    }
+
+    try {
+      setLoading(true);
+
+      const blob = await apiRequest<Blob>('/api/words/recording/get', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: { wordId },
+        responseType: 'blob',
+        auth: false, // لأننا بنبعت التوكن يدوي
+      });
+
+      const url = URL.createObjectURL(blob);
+      setLocalUrl(url);
+      return url;
+    } catch (err) {
+      console.error(err);
+
+      let msg = isAr
+        ? 'تعذر الاتصال بالخادم. تأكد من الاتصال بالإنترنت.'
+        : 'Could not reach the server. Please check your connection.';
+
+      if (err instanceof ApiError) {
+        msg = err.message || msg;
+      }
+
+      await Swal.fire({
+        ...swalBase,
+        icon: 'error',
+        title: isAr ? 'تعذر تحميل التسجيل' : 'Could not load recording',
+        text: msg,
+      });
+
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handlePlay() {
+    if (isGuest || !wordId) {
+      if (!localUrl) return;
+      const audio = new Audio(localUrl);
+      audio.play().catch(() => {
+        Swal.fire({
+          ...swalBase,
+          icon: 'error',
+          title: isAr ? 'تعذر تشغيل التسجيل' : 'Could not play recording',
           text: isAr
-            ? 'أنت الآن تسمع تسجيلك الصوتي لهذه الكلمة. يمكنك إعادة التسجيل من شاشة التدريب إذا أردت تغييره.'
-            : 'You are now listening to your own recording for this word. You can re-record it from the training screen if you want to change it.',
-          confirmButtonText: isAr ? 'متابعة' : 'Continue',
-          confirmButtonColor: '#0ea5e9',
+            ? 'حدث خطأ أثناء تشغيل التسجيل.'
+            : 'An error occurred while playing the recording.',
         });
-        setHasShownPlayInfo(true);
-      }
-
-      if (!isPlaying) {
-        await audio.play();
-        setIsPlaying(true);
-      } else {
-        audio.pause();
-        audio.currentTime = 0;
-        setIsPlaying(false);
-      }
-    } catch {
-      // ممكن تضيف SweetAlert للخطأ لو حبيت
+      });
+      return;
     }
+
+    const url = await ensureUrlFromBackend();
+    if (!url) return;
+
+    const audio = new Audio(url);
+    audio.play().catch(() => {
+      Swal.fire({
+        ...swalBase,
+        icon: 'error',
+        title: isAr ? 'تعذر تشغيل التسجيل' : 'Could not play recording',
+        text: isAr
+          ? 'حدث خطأ أثناء تشغيل التسجيل.'
+          : 'An error occurred while playing the recording.',
+      });
+    });
   }
 
-  function handleDownload() {
-    try {
-      const link = document.createElement('a');
-      link.href = recordingUrl;
-      link.download = downloadFileName;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-    } catch {
-      // تجاهُل بسيط
+  async function handleDownload() {
+    if (isGuest || !wordId) {
+      if (!localUrl) return;
+      const a = document.createElement('a');
+      a.href = localUrl;
+      a.download = `${fileName || 'recording'}.webm`;
+      a.click();
+      return;
     }
+
+    const url = await ensureUrlFromBackend();
+    if (!url) return;
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${fileName || 'recording'}.webm`;
+    a.click();
   }
 
   async function handleDelete() {
-    const res = await Swal.fire({
-      background: '#020617',
-      color: '#e2e8f0',
+    // ضيف / محلي
+    if (isGuest || !wordId) {
+      const result = await Swal.fire({
+        ...swalBase,
+        icon: 'warning',
+        title: isAr ? 'حذف التسجيل' : 'Delete recording',
+        text: isAr
+          ? 'سيتم حذف التسجيل المخزّن محلياً لهذه الكلمة.'
+          : 'The locally stored recording for this word will be deleted.',
+        showCancelButton: true,
+        confirmButtonText: isAr ? 'نعم، احذف' : 'Yes, delete',
+        cancelButtonText: isAr ? 'إلغاء' : 'Cancel',
+        confirmButtonColor: '#ef4444',
+      });
+
+      if (!result.isConfirmed) return;
+
+      if (localUrl?.startsWith('blob:')) {
+        URL.revokeObjectURL(localUrl);
+      }
+
+      setLocalUrl(null);
+      onDeleteLocal?.();
+
+      await Swal.fire({
+        ...swalBase,
+        icon: 'success',
+        title: isAr ? 'تم الحذف' : 'Deleted',
+        text: isAr ? 'تم حذف التسجيل المحلي.' : 'Local recording deleted.',
+        timer: 1000,
+        showConfirmButton: false,
+      });
+      return;
+    }
+
+    // Backend mode
+    const confirmRes = await Swal.fire({
+      ...swalBase,
       icon: 'warning',
-      title: isAr ? 'مسح التسجيل؟' : 'Delete recording?',
+      title: isAr ? 'حذف تسجيل الخادم' : 'Delete server recording',
       text: isAr
-        ? 'هل أنت متأكد أنك تريد مسح هذا التسجيل الصوتي فقط (بدون مسح الكلمة)؟'
-        : 'Are you sure you want to delete this recording only (word will stay)?',
+        ? 'سيتم حذف التسجيل المرتبط بهذه الكلمة من الخادم.'
+        : 'The recording linked to this word will be deleted from the server.',
       showCancelButton: true,
-      confirmButtonText: isAr ? 'نعم، مسح' : 'Yes, delete',
+      confirmButtonText: isAr ? 'نعم، احذف' : 'Yes, delete',
       cancelButtonText: isAr ? 'إلغاء' : 'Cancel',
-      confirmButtonColor: '#e11d48',
-      cancelButtonColor: '#64748b',
+      confirmButtonColor: '#ef4444',
     });
 
-    if (!res.isConfirmed) return;
+    if (!confirmRes.isConfirmed) return;
 
-    // إيقاف الصوت لو شغال
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
+    const token = getAccessToken();
+    if (!token) {
+      await Swal.fire({
+        ...swalBase,
+        icon: 'error',
+        title: isAr ? 'خطأ في الجلسة' : 'Session error',
+        text: isAr
+          ? 'لا يوجد رمز دخول صالح. حاول تسجيل الدخول مرة أخرى.'
+          : 'No valid access token. Please sign in again.',
+      });
+      return;
     }
-    setIsPlaying(false);
-    onDelete();
+
+    try {
+      setLoading(true);
+
+      const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_BASE_URL ??
+  'http://vocabtrainerapi.runasp.net';
+
+const res = await fetch(
+  `${API_BASE_URL}/api/words/recording/delete/${wordId}`,
+  {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  }
+);
+
+
+      if (localUrl?.startsWith('blob:')) {
+        URL.revokeObjectURL(localUrl);
+      }
+      setLocalUrl(null);
+
+      await Swal.fire({
+        ...swalBase,
+        icon: 'success',
+        title: isAr ? 'تم الحذف' : 'Deleted',
+        text: isAr
+          ? 'تم حذف التسجيل من الخادم.'
+          : 'Recording deleted from the server.',
+        timer: 1200,
+        showConfirmButton: false,
+      });
+    } catch (err) {
+      console.error(err);
+
+      let msg = isAr
+        ? 'حدث خطأ أثناء محاولة حذف التسجيل من الخادم.'
+        : 'An error occurred while trying to delete the recording from the server.';
+
+      if (err instanceof ApiError) {
+        msg = err.message || msg;
+      }
+
+      await Swal.fire({
+        ...swalBase,
+        icon: 'error',
+        title: isAr ? 'لم يتم حذف التسجيل' : 'Could not delete recording',
+        text: msg,
+      });
+    } finally {
+      setLoading(false);
+    }
   }
 
-  useEffect(() => {
-    return () => {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current = null;
-      }
-    };
-  }, []);
-
   return (
-    <div className="inline-flex flex-wrap items-center gap-1">
-      {/* زر تشغيل/إيقاف التسجيل */}
+    <div className="inline-flex items-center gap-1">
       <button
         type="button"
-        onClick={handleTogglePlay}
-        className="inline-flex items-center gap-1 rounded-full bg-emerald-500/90 px-3 py-1.5 text-[11px] font-semibold text-slate-950 hover:bg-emerald-400 transition-colors"
+        onClick={handlePlay}
+        disabled={loading}
+        className="inline-flex items-center gap-1 rounded-full bg-slate-800 px-2.5 py-1 text-[10px] font-semibold text-slate-100 hover:bg-slate-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
       >
-        {isPlaying ? <Pause size={12} /> : <Play size={12} />}
-        <span>{isAr ? 'تسجيلك' : 'My recording'}</span>
+        <Volume2 size={12} />
+        {isAr ? 'تشغيل' : 'Play'}
       </button>
 
-      {/* تحميل (أيقونة صغيرة) */}
       <button
         type="button"
         onClick={handleDownload}
-        title={isAr ? 'تحميل التسجيل' : 'Download recording'}
-        className="inline-flex items-center justify-center rounded-full border border-sky-500/60 bg-sky-500/10 p-1.5 text-[10px] text-sky-100 hover:bg-sky-500/20 transition"
+        disabled={loading}
+        className="inline-flex items-center gap-1 rounded-full bg-slate-800 px-2.5 py-1 text-[10px] font-semibold text-slate-100 hover:bg-slate-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
       >
-        <Download size={11} />
+        <Download size={12} />
+        {isAr ? 'تحميل' : 'Download'}
       </button>
 
-      {/* مسح التسجيل (أيقونة صغيرة) */}
       <button
         type="button"
         onClick={handleDelete}
-        title={isAr ? 'مسح التسجيل' : 'Delete recording'}
-        className="inline-flex items-center justify-center rounded-full border border-rose-500/60 bg-rose-500/10 p-1.5 text-[10px] text-rose-100 hover:bg-rose-500/20 transition"
+        disabled={loading}
+        className="inline-flex items-center gap-1 rounded-full bg-rose-500/90 px-2.5 py-1 text-[10px] font-semibold text-slate-50 hover:bg-rose-400 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
       >
-        <Trash2 size={11} />
+        <Trash2 size={12} />
+        {isAr ? 'حذف التسجيل' : 'Delete rec.'}
       </button>
     </div>
   );

@@ -70,3 +70,17 @@ export const STORAGE_KEY_ENABLED_LANGS = 'vocab_trainer_enabled_langs_v1';
 
 // قائمة لغات التطبيق اللي الأدمن يقدر يعدّلها (إضافة/حذف)
 export const STORAGE_KEY_APP_LANGUAGES = 'vocab_trainer_app_languages_v1';
+
+/**
+ * إعدادات تجربة الضيف (Guest Trial)
+ */
+
+// مدة تجربة الضيف بالدقائق
+export const GUEST_TRIAL_MINUTES = 10;
+
+// مفتاح تخزين جلسة الضيف (بداية وقت التجربة)
+export const STORAGE_KEY_GUEST_SESSION = 'vocab_trainer_guest_session_v1';
+
+// فلَج بيحدد إن التجربة المجانية استُخدمت قبل كده (مرة واحدة فقط)
+export const STORAGE_KEY_GUEST_TRIAL_USED =
+  'vocab_trainer_guest_trial_used_v1';
