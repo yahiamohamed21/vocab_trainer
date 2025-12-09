@@ -1,7 +1,7 @@
 // app/user/page.tsx
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Globe2, SunMedium, MoonStar } from 'lucide-react';
 
 import LanguageSelector from '@/components/LanguageSelector';
@@ -14,32 +14,48 @@ import StatsView from '@/components/views/StatsView';
 import { useUiSettings } from '@/context/UiSettingsContext';
 import { useAuth } from '@/context/AuthContext';
 import { useGuestTrial } from '@/hooks/useGuestTrial';
-import { post, ApiError } from '@/lib/api/httpClient';
+import { post, ApiError, API_BASE_URL as CLIENT_BASE_URL } from '@/lib/api/httpClient';
 
+// خليه نفس الـ baseUrl بتاع httpClient (ومع fallback https)
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL || 'http://vocabtrainerapi.runasp.net';
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  CLIENT_BASE_URL ||
+  'https://vocabtrainerapi.runasp.net';
 
 const SESSION_STORAGE_KEY = 'vocab_trainer_session_user';
+
+type StoredSession = {
+  user?: any;
+  accessToken?: string | null;
+  refreshToken?: string | null;
+};
 
 // نفس الهيلبر بتاع صفحة الأدمن
 function getAccessTokenFromStorage(): string | null {
   if (typeof window === 'undefined') return null;
+
   try {
     const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw);
+
+    const parsed = JSON.parse(raw) as StoredSession;
 
     if (parsed && typeof parsed === 'object') {
-      if (parsed.accessToken) return parsed.accessToken as string;
-      if (parsed.token) return parsed.token as string;
-      if (parsed.jwt) return parsed.jwt as string;
+      return (
+        (parsed as any).accessToken ??
+        (parsed as any).token ??
+        (parsed as any).jwt ??
+        null
+      );
     }
   } catch {
     return null;
   }
+
   return null;
 }
 
+// تحديث إعدادات الحساب في الباك
 async function patchAccountSettings(body: {
   uiLanguage?: string | null;
   theme?: string | null;
@@ -63,7 +79,6 @@ async function patchAccountSettings(body: {
 }
 
 export default function UserHomePage() {
-  // ✅ كل الهوكس فوق قبل أي return
   const [tab, setTab] = useState<TabId>('training');
   const { uiLang, setUiLang, theme, setTheme } = useUiSettings();
   const { user, loading } = useAuth();
@@ -79,70 +94,67 @@ export default function UserHomePage() {
 
   useGuestTrial(isGuest);
 
-  // ✅ تحميل اللغات المسموح بها من الباك (relative endpoint)
+  const loadAllowedLanguages = useCallback(async () => {
+    // ضيف → مفيش allowedLanguages من الباك
+    if (!user) {
+      setAllowedLangIds(null);
+      setAllowedError(null);
+      setAllowedLoading(false);
+      return;
+    }
+
+    setAllowedLoading(true);
+    setAllowedError(null);
+
+    try {
+      // endpoint: POST /api/languages/allowed body فاضي
+      const data = await post<any>('/api/languages/allowed', {});
+      const payload = data?.data ?? data ?? null;
+
+      let ids: string[] = [];
+
+      if (Array.isArray(payload)) {
+        if (payload.length > 0 && typeof payload[0] === 'string') {
+          ids = payload as string[];
+        } else {
+          ids = payload
+            .map((x: any) => x?.id || x?.languageId || x?.code || null)
+            .filter((x: any) => typeof x === 'string');
+        }
+      }
+
+      setAllowedLangIds(ids.length ? ids : null);
+    } catch (err) {
+      console.error('Allowed languages error', err);
+
+      let msg = isAr
+        ? 'تعذر الاتصال بالخادم أثناء تحميل اللغات.'
+        : 'Could not contact server to load languages.';
+
+      if (err instanceof ApiError && err.message) {
+        msg = err.message;
+      }
+
+      setAllowedError(msg);
+      setAllowedLangIds(null);
+    } finally {
+      setAllowedLoading(false);
+    }
+  }, [user, isAr]);
+
+  // ✅ تحميل اللغات المسموح بها من الباك
   useEffect(() => {
     let cancelled = false;
 
-    const loadAllowed = async () => {
-      // ضيف → مفيش allowedLanguages من الباك
-      if (!user) {
-        if (!cancelled) {
-          setAllowedLangIds(null);
-          setAllowedError(null);
-          setAllowedLoading(false);
-        }
-        return;
-      }
-
-      setAllowedLoading(true);
-      setAllowedError(null);
-
-      try {
-        // endpoint بتاع الباك: POST /api/languages/allowed body فاضي
-        const data = await post<any>('/api/languages/allowed', {});
-        if (cancelled) return;
-
-        const payload = data?.data ?? data ?? null;
-
-        let ids: string[] = [];
-
-        if (Array.isArray(payload)) {
-          if (payload.length > 0 && typeof payload[0] === 'string') {
-            ids = payload as string[];
-          } else {
-            ids = payload
-              .map((x: any) => x?.id || x?.languageId || x?.code || null)
-              .filter((x: any) => typeof x === 'string');
-          }
-        }
-
-        setAllowedLangIds(ids.length ? ids : null);
-      } catch (err) {
-        console.error('Allowed languages error', err);
-        if (cancelled) return;
-
-        let msg =
-          isAr
-            ? 'تعذر الاتصال بالخادم أثناء تحميل اللغات.'
-            : 'Could not contact server to load languages.';
-
-        if (err instanceof ApiError && err.message) {
-          msg = err.message;
-        }
-
-        setAllowedError(msg);
-        setAllowedLangIds(null);
-      } finally {
-        if (!cancelled) setAllowedLoading(false);
-      }
-    };
-
-    loadAllowed();
+    (async () => {
+      if (cancelled) return;
+      await loadAllowedLanguages();
+    })();
 
     return () => {
       cancelled = true;
     };
-  }, [user, isAr]);
+  }, [loadAllowedLanguages]);
 
   // تغيير لغة الواجهة + حفظ في الباك لو فيه يوزر حقيقي
   const handleUiLangChange = async (lang: 'ar' | 'en') => {
@@ -158,7 +170,6 @@ export default function UserHomePage() {
     await patchAccountSettings({ theme: nextTheme });
   };
 
-  // ✅ loading UI بعد الهوكس
   if (loading) {
     return (
       <div className="w-full max-w-5xl mx-4 mt-6 mb-10">
@@ -201,11 +212,17 @@ export default function UserHomePage() {
             {/* حالة تحميل/خطأ اللغات المسموح بها */}
             {allowedLoading && (
               <p className="mt-1 text-[10px] text-slate-500">
-                {isAr ? 'جاري تحميل اللغات المسموح بها...' : 'Loading allowed languages...'}
+                {isAr
+                  ? 'جاري تحميل اللغات المسموح بها...'
+                  : 'Loading allowed languages...'}
               </p>
             )}
             {allowedError && (
-              <p className={`mt-1 text-[10px] ${isDark ? 'text-rose-300' : 'text-rose-600'}`}>
+              <p
+                className={`mt-1 text-[10px] ${
+                  isDark ? 'text-rose-300' : 'text-rose-600'
+                }`}
+              >
                 {allowedError}
               </p>
             )}
@@ -273,7 +290,7 @@ export default function UserHomePage() {
                   className={[
                     'px-2.5 py-0.5 text-[10px] font-medium flex items-center gap-1 transition-colors',
                     isDark
-                      ? 'bg-slate-800 text-slate-900 shadow'
+                      ? 'bg-slate-800 text-slate-50 shadow'
                       : 'text-slate-300 hover:bg-slate-800/80',
                   ].join(' ')}
                 >
@@ -285,8 +302,8 @@ export default function UserHomePage() {
           </div>
         </div>
 
-        {/* important: مرّر اللغات المسموح بها للـ LanguageSelector */}
-        <LanguageSelector allowedLanguageIds={allowedLangIds ?? undefined} />
+        {/* مرّر اللغات المسموح بها للـ LanguageSelector */}
+<LanguageSelector />
         <Tabs currentTab={tab} onChange={setTab} />
       </header>
 

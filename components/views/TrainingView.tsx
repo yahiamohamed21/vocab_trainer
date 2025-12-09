@@ -177,58 +177,60 @@ export default function TrainingView() {
   }, []);
 
   // ✅ Load + filter voices for current language
-  useEffect(() => {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-    if (!currentLang?.ttsCode) return;
+  // ✅ load browser voices + pick best matching for current language
+useEffect(() => {
+  if (typeof window === 'undefined') return;
+  if (!ttsSupported) return;
 
-    const synth = window.speechSynthesis;
+  const synth = window.speechSynthesis;
 
-    function loadVoices() {
-      const all = synth.getVoices() || [];
-      setAvailableVoices(all);
+  const loadVoices = () => {
+    const all = synth.getVoices() || [];
+    setAvailableVoices(all);
 
-      if (!all.length) {
-        setVoiceWarning(
-          isAr
-            ? 'الأصوات لم تُحمّل بعد. جرّب إعادة تحميل الصفحة.'
-            : 'Voices are not loaded yet. Try reloading.',
-        );
-        return;
-      }
-
-      const prefix = currentLang.ttsCode.split('-')[0].toLowerCase();
-      const matches = all.filter(v =>
-        (v.lang || '').toLowerCase().startsWith(prefix),
+    // ✅ guard: currentLang ممكن تكون null أثناء أول رندر
+    if (!currentLang) {
+      setSelectedVoiceIndex('0');
+      setVoiceWarning(
+        isAr
+          ? 'اختر لغة أولاً عشان نحدد الصوت المناسب.'
+          : 'Select a language first to pick a suitable voice.',
       );
-
-      if (matches.length === 0) {
-        setVoiceWarning(
-          isAr
-            ? 'لم نجد صوت متصفح مناسب للغة الحالية، سيتم استخدام أي صوت.'
-            : 'No matching browser voice for this language, any voice will be used.',
-        );
-        setSelectedVoiceIndex('0');
-        return;
-      }
-
-      setVoiceWarning(null);
-
-      const firstMatchIndex = all.findIndex(v =>
-        (v.lang || '').toLowerCase().startsWith(prefix),
-      );
-
-      if (firstMatchIndex >= 0) {
-        setSelectedVoiceIndex(String(firstMatchIndex));
-      }
+      return;
     }
 
-    loadVoices();
-    synth.onvoiceschanged = loadVoices;
+    // ✅ هنا safe لأن currentLang مش null
+    const prefix = (currentLang.ttsCode || '')
+      .split('-')[0]
+      .toLowerCase();
 
-    return () => {
-      synth.onvoiceschanged = null;
-    };
-  }, [currentLang?.ttsCode, isAr]);
+    const matches = all.filter(v =>
+      (v.lang || '').toLowerCase().startsWith(prefix),
+    );
+
+    if (matches.length > 0) {
+      const best = matches[0];
+      const bestIndex = all.indexOf(best);
+      setSelectedVoiceIndex(String(bestIndex));
+      setVoiceWarning(null);
+    } else {
+      setSelectedVoiceIndex('0');
+      setVoiceWarning(
+        isAr
+          ? 'لا يوجد صوت مطابق للغة الحالية، سيتم استخدام الصوت الافتراضي.'
+          : 'No matching voice for this language; default voice will be used.',
+      );
+    }
+  };
+
+  loadVoices();
+  synth.onvoiceschanged = loadVoices;
+
+  return () => {
+    synth.onvoiceschanged = null;
+  };
+}, [ttsSupported, currentLang, isAr]);
+
 
   // ✅ Auto translate when text changes (always to Arabic)
   useEffect(() => {

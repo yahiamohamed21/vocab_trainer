@@ -9,10 +9,9 @@ import { useAuth } from '@/context/AuthContext';
 import { safeGetItem } from '@/lib/storage';
 import type { LanguageId } from '@/lib/types';
 
-// نفس مفتاح السيشن المستخدم في AuthContext
 const STORAGE_KEY_SESSION = 'vocab_trainer_session_user';
-// نفس الـ API BASE المستخدم في AuthContext
-const API_BASE_URL = 'http://vocabtrainerapi.runasp.net';
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_BASE_URL || 'http://vocabtrainerapi.runasp.net';
 
 type StoredSession = {
   user?: any;
@@ -75,7 +74,14 @@ function normalizeApiLanguage(item: any): LanguageConfig | null {
   };
 }
 
-export default function LanguageSelector() {
+/** ✅ NEW: props */
+type LanguageSelectorProps = {
+  allowedLanguageIds?: string[]; // لو جاية من صفحة /user
+};
+
+export default function LanguageSelector({
+  allowedLanguageIds,
+}: LanguageSelectorProps) {
   const { currentLanguageId, setCurrentLanguageId } = useAppState();
   const { uiLang } = useUiSettings();
   const { user } = useAuth();
@@ -112,7 +118,7 @@ export default function LanguageSelector() {
             'Content-Type': 'application/json',
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
           },
-          body: JSON.stringify({}), // الـ Swagger مذكور إنها body فاضية
+          body: JSON.stringify({}),
         });
 
         let json: any = null;
@@ -139,12 +145,7 @@ export default function LanguageSelector() {
 
         if (cancelled) return;
 
-        if (mapped.length > 0) {
-          setAvailableLanguages(mapped);
-        } else {
-          // لو مفيش نتيجة واضحة من الـ API → نرجع الافتراضي
-          setAvailableLanguages(LANGUAGES);
-        }
+        setAvailableLanguages(mapped.length > 0 ? mapped : LANGUAGES);
       } catch {
         if (!cancelled) {
           setAvailableLanguages(LANGUAGES);
@@ -159,31 +160,40 @@ export default function LanguageSelector() {
     };
   }, [user]);
 
-  // IDs اللغات المسموح بها بناءً على اليوزر
-  const allowedLanguageIds: LanguageId[] = useMemo(() => {
-    // ضيف أو أدمن → كل اللغات المتاحة من الـ API (أو الافتراضي)
+  // ✅ Determine allowed IDs
+  const finalAllowedIds: LanguageId[] = useMemo(() => {
+    // لو allowedLanguageIds جاية من الصفحة → خديها زي ما هي
+    if (allowedLanguageIds && allowedLanguageIds.length > 0) {
+      return allowedLanguageIds as LanguageId[];
+    }
+
+    // ضيف أو أدمن → كل المتاح
     if (!user || isAdmin) {
       return availableLanguages.map(l => l.id);
     }
 
-    // يوزر عادي → نستخدم allowed languages اللي جاية من الـ Backend (محفوظة في user.languages)
+    // يوزر عادي → يعتمد على user.languages
     if (!user.languages || user.languages.length === 0) {
       return availableLanguages.map(l => l.id);
     }
 
     const validIds = new Set(availableLanguages.map(l => l.id));
-    const filtered = user.languages.filter(id => validIds.has(id as LanguageId));
+    const filtered = user.languages.filter(id =>
+      validIds.has(id as LanguageId),
+    );
 
-    return filtered.length > 0 ? (filtered as LanguageId[]) : (availableLanguages.map(l => l.id) as LanguageId[]);
-  }, [user, isAdmin, availableLanguages]);
+    return filtered.length > 0
+      ? (filtered as LanguageId[])
+      : (availableLanguages.map(l => l.id) as LanguageId[]);
+  }, [allowedLanguageIds, user, isAdmin, availableLanguages]);
 
-  // اللغات اللي فعلاً هتظهر في السيلكتور
+  // اللغات اللي فعلاً هتظهر
   const visibleLanguages = useMemo(
-    () => availableLanguages.filter(lang => allowedLanguageIds.includes(lang.id)),
-    [availableLanguages, allowedLanguageIds]
+    () => availableLanguages.filter(l => finalAllowedIds.includes(l.id)),
+    [availableLanguages, finalAllowedIds],
   );
 
-  // تأمين: لو اللغة الحالية مش ضمن المسموح → نغيرها لأول لغة متاحة
+  // تأمين: لو اللغة الحالية مش ضمن المسموح → نغيرها
   useEffect(() => {
     if (!visibleLanguages.length) return;
     const exists = visibleLanguages.some(l => l.id === currentLanguageId);
@@ -192,7 +202,6 @@ export default function LanguageSelector() {
     }
   }, [currentLanguageId, visibleLanguages, setCurrentLanguageId]);
 
-  // اللغة الحالية لعرض النص تحت الزرار
   const current =
     visibleLanguages.find(l => l.id === currentLanguageId) ||
     visibleLanguages[0] ||
@@ -255,9 +264,7 @@ export default function LanguageSelector() {
         </span>
       </p>
 
-      <p className="text-[10px] text-center text-slate-500">
-        {extraLine}
-      </p>
+      <p className="text-[10px] text-center text-slate-500">{extraLine}</p>
     </div>
   );
 }
