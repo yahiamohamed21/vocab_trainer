@@ -6,9 +6,11 @@ import {
   RegisterWithCodeRequest,
   UpdateSettingsRequest,
 } from './models';
+
 import {
   post,
   get,
+  patch,              // ✅ ضيفي دي
   setAuthTokens,
   clearAuthTokens,
   configureApiClient,
@@ -65,9 +67,9 @@ export async function getMe(): Promise<BackendUser> {
  * Update user settings (UI language, theme, TTS, current language).
  */
 export async function updateSettings(req: UpdateSettingsRequest): Promise<void> {
-  await post('/api/account/settings', req, { method: 'PATCH' as any });
-}
 
+  await patch('/api/account/settings', req);
+}
 /**
  * Initialize the apiClient config from AuthContext:
  * - baseUrl (optional override)
