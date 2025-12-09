@@ -20,7 +20,7 @@ import { post, ApiError, API_BASE_URL as CLIENT_BASE_URL } from '@/lib/api/httpC
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ||
   CLIENT_BASE_URL ||
-  'https://vocabtrainerapi.runasp.net';
+  'http://vocabtrainerapi.runasp.net';
 
 const SESSION_STORAGE_KEY = 'vocab_trainer_session_user';
 
